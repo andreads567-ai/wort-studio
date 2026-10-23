@@ -282,10 +282,12 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings)
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
+        // Ao trocar a senha, o servidor invalida as sessões antigas e devolve um novo token
+        if (data.newAdminToken) adminToken = data.newAdminToken;
         return { success: true };
       }
-      const data = await res.json().catch(() => ({}));
       return { success: false, error: data.error || 'Erro ao salvar configurações no servidor.' };
     } catch {
       return { success: false, error: 'Erro de conexão com o servidor.' };

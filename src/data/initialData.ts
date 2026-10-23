@@ -1,4 +1,4 @@
-import { DemoModel, PlanItem, ServiceItem, CommercialSettings } from '../types';
+import type { DemoModel, PlanItem, ServiceItem, CommercialSettings } from '../types/index.js';
 
 export const INITIAL_SETTINGS: CommercialSettings = {
   whatsappNumber: '5511987654321', // Configurable in the Admin panel
@@ -9,8 +9,8 @@ export const INITIAL_SETTINGS: CommercialSettings = {
   sloganPrincipal: 'Transforme sua ideia em um site profissional.',
   sloganSecundario: 'Criamos sites, landing pages e páginas de vendas para empresas, profissionais e empreendedores que querem fortalecer sua presença digital.',
   aboutText: 'A WortSite é especializada no desenvolvimento de sites institucionais, landing pages e páginas de vendas de alto padrão. Unimos design contemporâneo, usabilidade intuitiva e código de alta performance para dar autoridade e presença sólida aos negócios de nossos clientes.',
-  // Credenciais sensíveis NÃO ficam no código: defina-as no arquivo .env (veja .env.example)
-  adminPasswordHash: '',
+  // Senha padrão original de acesso administrativo (pode ser sobrescrita pela variável ADMIN_PASSWORD na Vercel ou no painel)
+  adminPasswordHash: 'Wortsite@admin2026##',
   zohoAuthType: 'oauth2',
   zohoHost: 'smtp.zoho.com',
   zohoPort: 465,
