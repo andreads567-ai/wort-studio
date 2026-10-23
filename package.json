@@ -9,10 +9,13 @@
     "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "migrate:redis": "tsx scripts/migrate-to-redis.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@upstash/redis": "^1.39.0",
+    "@vercel/functions": "^3.10.3",
     "@vitejs/plugin-react": "^6.1.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
