@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-wort-dark: #05070D;
+    --color-wort-surface: #0E131F;
+    --color-wort-card: #171D2B;
+    --color-wort-card-hover: #1E2738;
+    --color-wort-blue: #0866FF;
+    --color-wort-blue-hover: #0654D4;
+    --color-wort-cyan: #00CFFF;
+    --color-wort-muted: #B8C1D1;
+    --color-wort-border: #222B3D;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    background-color: #05070D;
+    color: #FFFFFF;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    overflow-x: hidden;
+  }
+}
+
+/* Custom glow and glassmorphism utilities */
+.glow-blue {
+  box-shadow: 0 0 40px -10px rgba(8, 102, 255, 0.35);
+}
+
+.glow-blue-lg {
+  box-shadow: 0 0 70px -15px rgba(8, 102, 255, 0.45);
+}
+
+.glow-cyan {
+  box-shadow: 0 0 30px -8px rgba(0, 207, 255, 0.3);
+}
+
+/* Subtle border shine effect */
+.border-gradient-blue {
+  border-image: linear-gradient(to bottom right, rgba(8, 102, 255, 0.6), rgba(0, 207, 255, 0.3), rgba(34, 43, 61, 0.4)) 1;
+}
+
+/* Glassmorphism card surfaces */
+.glass-surface {
+  background: rgba(14, 19, 31, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(34, 43, 61, 0.7);
+}
+
+.glass-surface-hover:hover {
+  background: rgba(23, 29, 43, 0.85);
+  border-color: rgba(8, 102, 255, 0.45);
+  box-shadow: 0 10px 30px -10px rgba(8, 102, 255, 0.15);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #05070D;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1E2738;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #0866FF;
+}
+
+/* ======================================================== */
+/* ANIMATED WATERMARK BACKGROUND KEYFRAMES */
+/* ======================================================== */
+@keyframes watermarkScrollUp {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(0, -50%, 0);
+  }
+}
+
+@keyframes watermarkScrollDown {
+  0% {
+    transform: translate3d(0, -50%, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.animate-watermark-up {
+  animation: watermarkScrollUp linear infinite;
+  will-change: transform;
+}
+
+.animate-watermark-down {
+  animation: watermarkScrollDown linear infinite;
+  will-change: transform;
+}
+
+/* ======================================================== */
+/* SUCCESS CHECKMARK ANIMATION (Círculo Verde com Sinal de V) */
+/* ======================================================== */
+@keyframes successCircleDraw {
+  0% {
+    stroke-dashoffset: 320;
+    transform: rotate(-90deg);
+  }
+  100% {
+    stroke-dashoffset: 0;
+    transform: rotate(-90deg);
+  }
+}
+
+@keyframes successCheckDraw {
+  0% {
+    stroke-dashoffset: 90;
+    opacity: 0;
+  }
+  30% {
+    stroke-dashoffset: 90;
+    opacity: 0;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+@keyframes successPulseRing {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.22);
+    opacity: 0.35;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+@keyframes successGlowPulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 12px rgba(16, 185, 129, 0.45));
+  }
+  50% {
+    filter: drop-shadow(0 0 28px rgba(16, 185, 129, 0.85));
+  }
+}
+
+.animate-success-circle {
+  transform-origin: center;
+  stroke-dasharray: 320;
+  stroke-dashoffset: 320;
+  animation: successCircleDraw 0.85s cubic-bezier(0.65, 0, 0.45, 1) forwards;
+}
+
+.animate-success-check {
+  stroke-dasharray: 90;
+  stroke-dashoffset: 90;
+  animation: successCheckDraw 0.95s cubic-bezier(0.65, 0, 0.45, 1) forwards 0.25s;
+}
+
+.animate-success-pulse {
+  animation: successPulseRing 2.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.animate-success-glow {
+  animation: successGlowPulse 2.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-watermark-up,
+  .animate-watermark-down {
+    animation: none !important;
+  }
+}
