@@ -6,7 +6,8 @@ coverage/
 .vite/
 
 # Banco de dados local (gerado automaticamente pelo server.ts; contém leads e credenciais)
-data/
+# (com "/" no início para ignorar só a pasta da raiz, e NÃO src/data/)
+/data/
 
 # Variáveis de ambiente (nunca versionar segredos)
 .env*
