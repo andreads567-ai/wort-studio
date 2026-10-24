@@ -12,7 +12,7 @@ import crypto from 'crypto';
 import { waitUntil } from '@vercel/functions';
 import type { DemoModel, QuoteRequest, CommercialSettings } from '../src/types/index.js';
 import { getStorage, StorageNotConfiguredError } from './storage.js';
-import { dispatchZohoEmail, hasZohoConfigured } from './mailer.js';
+import { dispatchZohoEmail, hasZohoConfigured, verifyAndRefreshZohoOAuth, fetchZohoMailAccount } from './mailer.js';
 import {
   escapeHtml,
   renderClientQuoteEmail,
@@ -306,6 +306,19 @@ export function createApp() {
     }
 
     content.settings = { ...current, ...incoming };
+
+    // Verifica automaticamente Client ID, Client Secret e Refresh Token ao salvar
+    let zohoVerification = undefined;
+    if (content.settings.zohoAuthType !== 'smtp' && (content.settings.zohoClientId || content.settings.zohoRefreshToken)) {
+      zohoVerification = await verifyAndRefreshZohoOAuth(content.settings, false);
+      if (zohoVerification.valid) {
+        if (zohoVerification.refreshToken) content.settings.zohoRefreshToken = zohoVerification.refreshToken;
+        if (zohoVerification.accessToken) content.settings.zohoAccessToken = zohoVerification.accessToken;
+        if (zohoVerification.accountId) content.settings.zohoAccountId = zohoVerification.accountId;
+        if (zohoVerification.mailboxAddress && !incoming.zohoUser) content.settings.zohoUser = zohoVerification.mailboxAddress;
+      }
+    }
+
     try {
       await storage.saveContent(content);
       console.log(`[Settings API] Configurações e credenciais gravadas com sucesso no storage (${storage.kind})`);
@@ -320,6 +333,7 @@ export function createApp() {
     const passwordChanged = getEffectiveAdminPassword(current) !== getEffectiveAdminPassword(content.settings);
     res.json({
       ...content.settings,
+      zohoVerification,
       ...(passwordChanged ? { newAdminToken: createAdminToken(content.settings) } : {})
     });
   }));
@@ -483,38 +497,54 @@ export function createApp() {
 
   // 7. Zoho OAuth2 Exchange Token Endpoint
   app.post('/api/zoho/exchange-token', requireAdmin, wrap(async (req, res) => {
-    const { code, redirectUri } = req.body || {};
+    const {
+      code,
+      redirectUri,
+      clientId: bodyClientId,
+      clientSecret: bodyClientSecret,
+      user: bodyUser,
+      senderName: bodySenderName
+    } = req.body || {};
+
     const storage = getStorage();
     const content = await storage.getContent();
     const settings = content.settings;
 
-    const clientId = settings.zohoClientId || process.env.ZOHO_CLIENT_ID || '';
-    const clientSecret = settings.zohoClientSecret || process.env.ZOHO_CLIENT_SECRET || '';
+    // Usa o Client ID e Client Secret digitados na tela (ou salvos no banco)
+    const clientId = String(bodyClientId || settings.zohoClientId || process.env.ZOHO_CLIENT_ID || '').trim();
+    const clientSecret = String(bodyClientSecret || settings.zohoClientSecret || process.env.ZOHO_CLIENT_SECRET || '').trim();
+    const cleanCode = String(code || '').trim();
 
-    if (!code) {
+    if (!cleanCode) {
       return res.status(400).json({ error: 'Por favor, informe o Código de Concessão (Grant Token / Code) gerado no Zoho API Console.' });
     }
 
+    if (!clientId || !clientSecret) {
+      return res.status(400).json({ error: 'Informe o Client ID e o Client Secret antes de gerar o token.' });
+    }
+
+    // Persiste desde já o Client ID e Client Secret informados na tela
+    settings.zohoClientId = clientId;
+    settings.zohoClientSecret = clientSecret;
+    if (bodyUser) settings.zohoUser = String(bodyUser).trim();
+    if (bodySenderName) settings.zohoSenderName = String(bodySenderName).trim();
+
     try {
+      // 1. Tentativa padrão Self Client (sem redirect_uri)
       const bodyParams = new URLSearchParams({
-        code: String(code).trim(),
+        code: cleanCode,
         client_id: clientId,
         client_secret: clientSecret,
         grant_type: 'authorization_code'
       });
 
-      // Inclui redirect_uri apenas se informado e diferente do placeholder do Self Client
-      if (redirectUri && redirectUri !== 'https://wortsite.com.br' && redirectUri !== '') {
-        bodyParams.append('redirect_uri', redirectUri);
-      }
-
-      const response = await fetch('https://accounts.zoho.com/oauth/v2/token', {
+      let response = await fetch('https://accounts.zoho.com/oauth/v2/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: bodyParams
       });
 
-      const text = await response.text();
+      let text = await response.text();
       let data: any = {};
       try {
         data = JSON.parse(text);
@@ -525,53 +555,90 @@ export function createApp() {
         });
       }
 
+      // 2. Se a Zoho exigiu redirect_uri, tenta novamente incluindo redirect_uri
+      if (data.error === 'invalid_redirect_uri' && redirectUri) {
+        bodyParams.append('redirect_uri', String(redirectUri).trim());
+        response = await fetch('https://accounts.zoho.com/oauth/v2/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: bodyParams
+        });
+        data = await response.json().catch(() => ({}));
+      }
+
+      // 3. Se retornou invalid_code, verifica se o código colado já é diretamente um Refresh Token válido
+      let usedRefreshGrant = false;
+      if (data.error === 'invalid_code') {
+        const refreshCheckRes = await fetch('https://accounts.zoho.com/oauth/v2/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            refresh_token: cleanCode,
+            client_id: clientId,
+            client_secret: clientSecret,
+            grant_type: 'refresh_token'
+          })
+        });
+        const refreshCheckData: any = await refreshCheckRes.json().catch(() => ({}));
+        if (refreshCheckData.access_token) {
+          data = {
+            access_token: refreshCheckData.access_token,
+            refresh_token: cleanCode,
+            api_domain: refreshCheckData.api_domain
+          };
+          usedRefreshGrant = true;
+        }
+      }
+
       if (data.error) {
         let msg = data.error;
-        if (data.error === 'invalid_code') {
-          msg = 'Código inválido ou já expirado. Como os Grant Tokens da Zoho duram poucos minutos e só podem ser usados UMA única vez, gere um novo código no Self Client do Zoho Console e clique em Conectar.';
+        if (data.error === 'invalid_client') {
+          msg = 'Client ID ou Client Secret incorretos (invalid_client). Verifique se o Client ID e o Client Secret digitados correspondem exatamente ao Self Client no Zoho API Console.';
+        } else if (data.error === 'invalid_code') {
+          msg = 'Código inválido ou já expirado (invalid_code). Os códigos gerados no Self Client da Zoho duram poucos minutos e só podem ser usados UMA única vez. Gere um novo código no Zoho API Console com o escopo ZohoMail.messages.CREATE,ZohoMail.messages.ALL,ZohoMail.accounts.READ e clique em Conectar & Gerar Tokens.';
         }
+        // Ainda assim salva o Client ID e Client Secret digitados no banco para não perdê-los
+        await storage.saveContent(content).catch(() => {});
         return res.status(400).json({ success: false, error: msg, rawError: data.error });
       }
 
-      if (data.refresh_token) settings.zohoRefreshToken = data.refresh_token;
-      if (data.access_token) settings.zohoAccessToken = data.access_token;
+      // 4. Substitui obrigatoriamente o Refresh Token pelo novo token gerado!
+      const newRefreshToken = String(data.refresh_token || (usedRefreshGrant ? cleanCode : data.access_token || '')).trim();
+      const newAccessToken = String(data.access_token || '').trim();
+
+      settings.zohoRefreshToken = newRefreshToken;
+      if (newAccessToken) settings.zohoAccessToken = newAccessToken;
       settings.zohoAuthType = 'oauth2';
 
-      // Detecta automaticamente o accountId, se possível
-      try {
-        if (data.access_token) {
-          const accRes = await fetch('https://mail.zoho.com/api/accounts', {
-            headers: { 'Authorization': `Zoho-oauthtoken ${data.access_token}` }
-          });
-          const accJson: any = await accRes.json();
-          if (accJson.data && accJson.data[0]) {
-            settings.zohoAccountId = accJson.data[0].accountId;
-            if (accJson.data[0].mailboxAddress) {
-              settings.zohoUser = accJson.data[0].mailboxAddress;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Could not auto-fetch Zoho accountId on token exchange', e);
+      // 5. Detecta automaticamente o accountId e endereço da conta na Zoho Mail API
+      if (newAccessToken) {
+        const accInfo = await fetchZohoMailAccount(newAccessToken);
+        if (accInfo.accountId) settings.zohoAccountId = accInfo.accountId;
+        if (accInfo.mailboxAddress) settings.zohoUser = accInfo.mailboxAddress;
       }
 
+      // 6. Grava permanentemente no Supabase (settings + site_content)
       try {
-      await storage.saveContent(content);
-      console.log(`[Settings API] Configurações e credenciais gravadas com sucesso no storage (${storage.kind})`);
-    } catch (saveErr: any) {
-      console.error('[Settings API Error] Falha ao persistir configurações no banco:', saveErr);
-      return res.status(500).json({
-        error: `Falha ao gravar configurações no banco de dados (${storage.kind}): ${saveErr?.message || saveErr}`
-      });
-    }
+        await storage.saveContent(content);
+        console.log(`[Zoho OAuth] Novo Refresh Token (${newRefreshToken.slice(0, 12)}...) gravado com sucesso no storage (${storage.kind})`);
+      } catch (saveErr: any) {
+        console.error('[Zoho OAuth Error] Falha ao persistir novo token no banco:', saveErr);
+        return res.status(500).json({
+          success: false,
+          error: `Falha ao gravar novo token no banco de dados (${storage.kind}): ${saveErr?.message || saveErr}`
+        });
+      }
 
       return res.json({
         success: true,
-        message: 'Tokens OAuth2 gerados e vinculados com sucesso à plataforma WortSite!',
-        hasRefreshToken: !!data.refresh_token,
-        hasAccessToken: !!data.access_token,
-        refreshToken: data.refresh_token,
-        accessToken: data.access_token,
+        message: 'Novo Refresh Token OAuth 2.0 gerado, validado e substituído permanentemente no banco de dados!',
+        hasRefreshToken: Boolean(newRefreshToken),
+        hasAccessToken: Boolean(newAccessToken),
+        refreshToken: newRefreshToken,
+        accessToken: newAccessToken,
+        accountId: settings.zohoAccountId,
+        user: settings.zohoUser,
+        clientId: settings.zohoClientId,
         apiDomain: data.api_domain
       });
     } catch (err: any) {
@@ -581,6 +648,28 @@ export function createApp() {
         error: `Falha na requisição à Zoho: ${err?.message || 'Erro de rede'}`
       });
     }
+  }));
+
+  // 7.05 Zoho OAuth2 Verify & Auto-Refresh Endpoint
+  app.post('/api/zoho/verify', requireAdmin, wrap(async (req, res) => {
+    const { clientId, clientSecret, refreshToken, user, senderName } = req.body || {};
+    const storage = getStorage();
+    const content = await storage.getContent();
+
+    const mergedSettings: CommercialSettings = {
+      ...content.settings,
+      ...(clientId !== undefined ? { zohoClientId: String(clientId).trim() } : {}),
+      ...(clientSecret !== undefined ? { zohoClientSecret: String(clientSecret).trim() } : {}),
+      ...(refreshToken !== undefined ? { zohoRefreshToken: String(refreshToken).trim() } : {}),
+      ...(user !== undefined ? { zohoUser: String(user).trim() } : {}),
+      ...(senderName !== undefined ? { zohoSenderName: String(senderName).trim() } : {})
+    };
+
+    const verification = await verifyAndRefreshZohoOAuth(mergedSettings, true);
+    return res.json({
+      success: verification.valid,
+      ...verification
+    });
   }));
 
   // 7.1 Zoho Mail Test Endpoint (Supports OAuth2 & SMTP)

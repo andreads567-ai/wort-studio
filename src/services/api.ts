@@ -226,19 +226,35 @@ export const api = {
     }
   },
 
-  async exchangeZohoToken(code: string, redirectUri?: string): Promise<{
+  async exchangeZohoToken(
+    code: string,
+    redirectUri?: string,
+    credentials?: {
+      clientId?: string;
+      clientSecret?: string;
+      user?: string;
+      senderName?: string;
+    }
+  ): Promise<{
     success: boolean;
     message?: string;
     error?: string;
     hasRefreshToken?: boolean;
     refreshToken?: string;
     accessToken?: string;
+    accountId?: string;
+    user?: string;
+    clientId?: string;
   }> {
     try {
       const res = await adminFetch('/api/zoho/exchange-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, redirectUri })
+        body: JSON.stringify({
+          code,
+          redirectUri,
+          ...(credentials || {})
+        })
       });
       const text = await res.text();
       let data: any = {};
@@ -253,12 +269,63 @@ export const api = {
           message: data.message,
           hasRefreshToken: data.hasRefreshToken,
           refreshToken: data.refreshToken,
-          accessToken: data.accessToken
+          accessToken: data.accessToken,
+          accountId: data.accountId,
+          user: data.user,
+          clientId: data.clientId
         };
       }
       return { success: false, error: data.error || 'Falha ao validar código na Zoho API' };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Erro de conexão com o servidor' };
+    }
+  },
+
+  async verifyZohoCredentials(payload?: {
+    clientId?: string;
+    clientSecret?: string;
+    refreshToken?: string;
+    user?: string;
+    senderName?: string;
+  }): Promise<{
+    success: boolean;
+    valid: boolean;
+    clientCredentialsValid: boolean;
+    tokenValid: boolean;
+    accessToken?: string;
+    refreshToken?: string;
+    accountId?: string;
+    mailboxAddress?: string;
+    message?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await adminFetch('/api/zoho/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {})
+      });
+      const data = await res.json().catch(() => ({}));
+      return {
+        success: Boolean(data.success || data.valid),
+        valid: Boolean(data.valid),
+        clientCredentialsValid: Boolean(data.clientCredentialsValid),
+        tokenValid: Boolean(data.tokenValid),
+        accessToken: data.accessToken,
+        refreshToken: data.refreshToken,
+        accountId: data.accountId,
+        mailboxAddress: data.mailboxAddress,
+        message: data.message,
+        error: data.error
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        valid: false,
+        clientCredentialsValid: false,
+        tokenValid: false,
+        error: err?.message || 'Erro de conexão ao verificar credenciais Zoho.'
+      };
     }
   },
 
@@ -310,7 +377,12 @@ export const api = {
     }
   },
 
-  async updateSettings(settings: CommercialSettings): Promise<{ success: boolean; error?: string }> {
+  async updateSettings(settings: CommercialSettings): Promise<{
+    success: boolean;
+    error?: string;
+    settings?: CommercialSettings;
+    zohoVerification?: any;
+  }> {
     try {
       const res = await adminFetch('/api/settings', {
         method: 'PUT',
@@ -321,7 +393,11 @@ export const api = {
       if (res.ok) {
         // Ao trocar a senha, o servidor invalida as sessões antigas e devolve um novo token
         if (data.newAdminToken) setStoredAdminToken(data.newAdminToken);
-        return { success: true };
+        return {
+          success: true,
+          settings: data,
+          zohoVerification: data.zohoVerification
+        };
       }
       return { success: false, error: data.error || 'Erro ao salvar configurações no servidor.' };
     } catch {

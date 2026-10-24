@@ -82,6 +82,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [isExchangingCode, setIsExchangingCode] = useState(false);
   const [exchangeResult, setExchangeResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
   const [copiedEndpoint, setCopiedEndpoint] = useState<string | null>(null);
+  const [isVerifyingZoho, setIsVerifyingZoho] = useState(false);
+  const [zohoVerifyState, setZohoVerifyState] = useState<{
+    checked: boolean;
+    valid: boolean;
+    clientCredentialsValid: boolean;
+    tokenValid: boolean;
+    message?: string;
+    error?: string;
+  }>({ checked: false, valid: false, clientCredentialsValid: false, tokenValid: false });
 
   // Models Management State
   const [models, setModels] = useState<DemoModel[]>(initialModels);
@@ -100,7 +109,44 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [updatingQuoteId, setUpdatingQuoteId] = useState<string | null>(null);
   const [isSavingApiSettings, setIsSavingApiSettings] = useState(false);
 
-  const loadSettings = async () => {
+  const runZohoVerification = async (override?: Partial<CommercialSettings>) => {
+    setIsVerifyingZoho(true);
+    try {
+      const target = { ...settingsForm, ...(override || {}) };
+      const res = await api.verifyZohoCredentials({
+        clientId: target.zohoClientId,
+        clientSecret: target.zohoClientSecret,
+        refreshToken: target.zohoRefreshToken,
+        user: target.zohoUser,
+        senderName: target.zohoSenderName
+      });
+      setZohoVerifyState({
+        checked: true,
+        valid: res.valid,
+        clientCredentialsValid: res.clientCredentialsValid,
+        tokenValid: res.tokenValid,
+        message: res.message,
+        error: res.error
+      });
+      if (res.valid) {
+        setSettingsForm(prev => ({
+          ...prev,
+          ...(res.refreshToken ? { zohoRefreshToken: res.refreshToken } : {}),
+          ...(res.accessToken ? { zohoAccessToken: res.accessToken } : {}),
+          ...(res.accountId ? { zohoAccountId: res.accountId } : {}),
+          ...(res.mailboxAddress ? { zohoUser: res.mailboxAddress } : {})
+        }));
+      }
+      return res;
+    } catch (err) {
+      console.error('[Admin] Erro ao verificar credenciais Zoho:', err);
+      return null;
+    } finally {
+      setIsVerifyingZoho(false);
+    }
+  };
+
+  const loadSettings = async (verifyAfterLoad = false) => {
     try {
       console.log('[Admin] Carregando credenciais e configurações salvas no banco de dados...');
       const data = await api.getAdminSettings();
@@ -112,16 +158,20 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           user: data.zohoUser
         });
         setAdminSettingsLoaded(true);
-        setSettingsForm(prev => ({
-          ...prev,
+        const updatedSettings: CommercialSettings = {
+          ...settingsForm,
           ...data,
-          zohoRefreshToken: data.zohoRefreshToken || prev.zohoRefreshToken || '',
-          zohoAccessToken: (data as any).accessToken || data.zohoAccessToken || prev.zohoAccessToken || '',
-          zohoClientId: data.zohoClientId || prev.zohoClientId || '',
-          zohoClientSecret: data.zohoClientSecret || prev.zohoClientSecret || '',
-          zohoUser: data.zohoUser || prev.zohoUser || 'wort.studio@aliandre.com.br',
+          zohoRefreshToken: data.zohoRefreshToken ?? settingsForm.zohoRefreshToken ?? '',
+          zohoAccessToken: (data as any).accessToken || data.zohoAccessToken || settingsForm.zohoAccessToken || '',
+          zohoClientId: data.zohoClientId ?? settingsForm.zohoClientId ?? '',
+          zohoClientSecret: data.zohoClientSecret ?? settingsForm.zohoClientSecret ?? '',
+          zohoUser: data.zohoUser || settingsForm.zohoUser || 'wort.studio@aliandre.com.br',
           zohoAuthType: ((data.zohoClientId || data.zohoRefreshToken) && !data.zohoPass) ? 'oauth2' : (data.zohoAuthType || 'oauth2')
-        }));
+        };
+        setSettingsForm(updatedSettings);
+        if (verifyAfterLoad && updatedSettings.zohoAuthType !== 'smtp') {
+          await runZohoVerification(updatedSettings);
+        }
       }
     } catch (err) {
       console.error('[Admin] Falha ao sincronizar configurações com o banco:', err);
@@ -133,7 +183,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     if (existing) {
       setIsAuthenticated(true);
       loadQuotes();
-      loadSettings();
+      loadSettings(true);
       onRefreshData();
     }
     api.getHealthInfo().then(info => {
@@ -163,8 +213,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     if (!isAuthenticated) return;
     if (activeTab === 'quotes') {
       loadQuotes();
-    } else if (activeTab === 'api' || activeTab === 'settings') {
-      loadSettings();
+    } else if (activeTab === 'api') {
+      loadSettings(true);
+    } else if (activeTab === 'settings') {
+      loadSettings(false);
     } else if (activeTab === 'models' || activeTab === 'plans') {
       onRefreshData();
     }
@@ -332,10 +384,19 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   // Zoho OAuth2 Grant Code Exchange
   const handleExchangeGrantCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!grantCodeInput.trim()) {
+    const cleanGrantCode = grantCodeInput.trim();
+    if (!cleanGrantCode) {
       setExchangeResult({
         success: false,
         error: 'Por favor, cole o Código de Concessão (Grant Token) gerado no Zoho API Console.'
+      });
+      return;
+    }
+
+    if (!settingsForm.zohoClientId?.trim() || !settingsForm.zohoClientSecret?.trim()) {
+      setExchangeResult({
+        success: false,
+        error: 'Preencha o Client ID e o Client Secret acima antes de conectar e gerar os tokens.'
       });
       return;
     }
@@ -344,24 +405,41 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     setExchangeResult(null);
 
     try {
-      console.log('[Admin] Iniciando troca do Grant Token Zoho pela API...');
-      const res = await api.exchangeZohoToken(grantCodeInput.trim(), settingsForm.zohoRedirectUri);
+      console.log('[Admin] Iniciando troca do Grant Token Zoho pela API com Client ID atual...');
+      const res = await api.exchangeZohoToken(
+        cleanGrantCode,
+        settingsForm.zohoRedirectUri,
+        {
+          clientId: settingsForm.zohoClientId.trim(),
+          clientSecret: settingsForm.zohoClientSecret.trim(),
+          user: settingsForm.zohoUser?.trim(),
+          senderName: settingsForm.zohoSenderName?.trim()
+        }
+      );
       setExchangeResult(res);
 
-      if (res.success) {
-        console.log('[Admin Success] Tokens da API Zoho trocados e salvos com sucesso.');
-        if (res.refreshToken) {
-          setSettingsForm(prev => ({
-            ...prev,
-            zohoRefreshToken: res.refreshToken,
-            zohoAccessToken: res.accessToken || prev.zohoAccessToken,
-            zohoAuthType: 'oauth2'
-          }));
-        }
+      if (res.success && res.refreshToken) {
+        console.log('[Admin Success] Novo Refresh Token gerado e substituído no banco:', `${res.refreshToken.slice(0, 12)}...`);
+        setAdminSettingsLoaded(true);
+        setSettingsForm(prev => ({
+          ...prev,
+          zohoClientId: res.clientId || prev.zohoClientId,
+          zohoRefreshToken: res.refreshToken!,
+          zohoAccessToken: res.accessToken || prev.zohoAccessToken,
+          zohoAccountId: res.accountId || prev.zohoAccountId,
+          zohoUser: res.user || prev.zohoUser,
+          zohoAuthType: 'oauth2'
+        }));
+        setZohoVerifyState({
+          checked: true,
+          valid: true,
+          clientCredentialsValid: true,
+          tokenValid: true,
+          message: 'Client ID, Client Secret e novo Refresh Token ativos e verificados na Zoho API!'
+        });
         setGrantCodeInput('');
-        await loadSettings();
         onRefreshData();
-        showNotice('Tokens da API Zoho gerados e gravados permanentemente no banco de dados!');
+        showNotice('Novo Refresh Token gerado, validado e substituído permanentemente no banco de dados!');
       } else {
         console.error('[Admin Error] Falha ao trocar token Zoho:', res.error);
       }
@@ -405,9 +483,27 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
       if (res.success) {
         console.log('[Admin Success] Credenciais de API salvas com sucesso no banco de dados.');
-        await loadSettings();
+        if (res.settings) {
+          setSettingsForm(prev => ({
+            ...prev,
+            ...res.settings,
+            zohoRefreshToken: res.settings?.zohoRefreshToken ?? prev.zohoRefreshToken
+          }));
+        }
+        if (res.zohoVerification) {
+          setZohoVerifyState({
+            checked: true,
+            valid: Boolean(res.zohoVerification.valid),
+            clientCredentialsValid: Boolean(res.zohoVerification.clientCredentialsValid),
+            tokenValid: Boolean(res.zohoVerification.tokenValid),
+            message: res.zohoVerification.message,
+            error: res.zohoVerification.error
+          });
+        } else {
+          await runZohoVerification();
+        }
         onRefreshData();
-        showNotice('Configurações de API & integração com Zoho Mail salvas com sucesso no banco de dados!');
+        showNotice('Configurações de API & integração com Zoho Mail salvas e verificadas no banco de dados!');
       } else {
         const errorMsg = res.error || 'Erro ao salvar configurações de API no banco de dados.';
         console.error('[Admin Error] Erro ao salvar configurações:', errorMsg);
@@ -1509,23 +1605,50 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                 <div className="space-y-5">
                   <div className="p-4 rounded-2xl bg-[#05070D] border border-[#1E293B] flex items-center justify-between gap-4 flex-wrap">
                     <div className="flex items-center gap-3">
-                      <div className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse" />
+                      <div className={`w-3 h-3 rounded-full ${
+                        zohoVerifyState.checked && !zohoVerifyState.clientCredentialsValid
+                          ? 'bg-red-400'
+                          : 'bg-emerald-400 animate-pulse'
+                      }`} />
                       <div>
-                        <span className="text-xs font-bold text-white block">Credenciais Zoho API Configuradas</span>
-                        <span className="text-[11px] text-[#B8C1D1]">Client ID e Client Secret ativos para autenticação segura.</span>
+                        <span className="text-xs font-bold text-white block">
+                          {zohoVerifyState.checked
+                            ? zohoVerifyState.clientCredentialsValid
+                              ? 'Client ID e Client Secret Validados na Zoho API'
+                              : 'Client ID ou Client Secret Inválidos na Zoho API'
+                            : 'Credenciais Zoho API Configuradas'}
+                        </span>
+                        <span className="text-[11px] text-[#B8C1D1]">
+                          {zohoVerifyState.checked && zohoVerifyState.error && !zohoVerifyState.tokenValid
+                            ? zohoVerifyState.error
+                            : 'Client ID e Client Secret ativos para autenticação segura e renovação automática.'}
+                        </span>
                       </div>
                     </div>
-                    {settingsForm.zohoRefreshToken ? (
-                      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
-                        <CheckCircle className="w-3.5 h-3.5" />
-                        OAuth 2.0 Conectado (Refresh Token Ativo)
-                      </span>
-                    ) : (
-                      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5" />
-                        Aguardando Token de Concessão
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => runZohoVerification()}
+                        disabled={isVerifyingZoho}
+                        className="px-3 py-1 rounded-full text-xs font-semibold bg-[#172238] hover:bg-[#23314E] text-[#00CFFF] border border-[#0866FF]/40 flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isVerifyingZoho ? 'animate-spin' : ''}`} />
+                        {isVerifyingZoho ? 'Verificando...' : 'Verificar & Renovar Token'}
+                      </button>
+                      {settingsForm.zohoRefreshToken && (!zohoVerifyState.checked || zohoVerifyState.tokenValid) ? (
+                        <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          OAuth 2.0 Conectado (Refresh Token Ativo)
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5" />
+                          {zohoVerifyState.checked && !zohoVerifyState.tokenValid
+                            ? 'Refresh Token Expirado / Gerar Novo Código'
+                            : 'Aguardando Token de Concessão'}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1664,29 +1787,52 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
                     {settingsForm.zohoRefreshToken ? (
                       <div className="pt-3 border-t border-[#1E293B] space-y-3">
-                        <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between gap-3 flex-wrap">
-                          <div className="flex items-center gap-2.5">
-                            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                            <div>
-                              <span className="text-xs font-bold text-white block">Token Permanente OAuth 2.0 Gravado com Sucesso</span>
-                              <span className="text-[11px] text-emerald-300/80">A plataforma renova o acesso automaticamente para todos os envios.</span>
+                        {zohoVerifyState.checked && !zohoVerifyState.tokenValid ? (
+                          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 flex-wrap">
+                            <div className="flex items-center gap-2.5">
+                              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                              <div>
+                                <span className="text-xs font-bold text-white block">
+                                  Atenção: O Refresh Token abaixo não corresponde ao Client ID atual ou expirou
+                                </span>
+                                <span className="text-[11px] text-amber-300/90">
+                                  Gere um novo código (Grant Token) no Zoho API Console (Self Client), cole no campo acima e clique em "Conectar & Gerar Tokens" para substituir automaticamente este token.
+                                </span>
+                              </div>
                             </div>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30">
+                              Requer Novo Grant Token
+                            </span>
                           </div>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
-                            Token Conectado
-                          </span>
-                        </div>
+                        ) : (
+                          <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between gap-3 flex-wrap">
+                            <div className="flex items-center gap-2.5">
+                              <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <div>
+                                <span className="text-xs font-bold text-white block">Token Permanente OAuth 2.0 Gravado e Verificado</span>
+                                <span className="text-[11px] text-emerald-300/80">A plataforma verifica e renova o Access Token automaticamente para todos os envios.</span>
+                              </div>
+                            </div>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
+                              Token Conectado & Verificado
+                            </span>
+                          </div>
+                        )}
 
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="text-[11px] font-semibold text-white">Refresh Token Permanente (Salvo no Banco)</label>
-                            <span className="text-[10px] text-[#00CFFF]">Armazenamento seguro</span>
+                            <label className="text-[11px] font-semibold text-white">Refresh Token Permanente (Salvo no Banco — Substituído automaticamente ao Conectar)</label>
+                            <span className="text-[10px] text-[#00CFFF]">Armazenamento seguro no Supabase</span>
                           </div>
                           <input
                             type="text"
                             value={settingsForm.zohoRefreshToken}
                             onChange={(e) => setSettingsForm({ ...settingsForm, zohoRefreshToken: e.target.value })}
-                            className="w-full px-3 py-2 rounded-lg bg-[#0D1322] border border-[#222B3D] text-[11px] text-emerald-400 font-mono"
+                            className={`w-full px-3 py-2 rounded-lg bg-[#0D1322] border text-[11px] font-mono ${
+                              zohoVerifyState.checked && !zohoVerifyState.tokenValid
+                                ? 'border-amber-500/50 text-amber-300'
+                                : 'border-[#222B3D] text-emerald-400'
+                            }`}
                           />
                         </div>
                       </div>
