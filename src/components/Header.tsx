@@ -26,6 +26,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onNavigate, onRequest
     { id: 'servicos', label: 'Serviços' },
     { id: 'planos', label: 'Planos' },
     { id: 'como-funciona', label: 'Como Funciona' },
+    { id: 'propostas', label: 'Orçamentos & Propostas' },
     { id: 'sobre', label: 'Sobre' },
     { id: 'contato', label: 'Contato' },
   ];

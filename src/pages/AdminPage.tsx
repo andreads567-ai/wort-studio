@@ -31,12 +31,14 @@ import {
   RefreshCw,
   Bell,
   Key,
-  Info
+  Info,
+  FileText
 } from 'lucide-react';
 import { DemoModel, PlanItem, CommercialSettings, QuoteRequest, ModelCategory } from '../types';
 import { api, buildWhatsAppUrl } from '../services/api';
 import { Logo } from '../components/Logo';
 import { AnimatedWatermark } from '../components/AnimatedWatermark';
+import { ProposalsManager } from '../components/proposals/ProposalsManager';
 
 interface AdminPageProps {
   models: DemoModel[];
@@ -60,7 +62,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [showSettingsPassword, setShowSettingsPassword] = useState(false);
 
   // Active Admin Tab
-  const [activeTab, setActiveTab] = useState<'quotes' | 'models' | 'plans' | 'settings' | 'api'>('quotes');
+  const [activeTab, setActiveTab] = useState<'quotes' | 'proposals' | 'models' | 'plans' | 'settings' | 'api'>('quotes');
 
   // Backend Status State
   const [isBackendConnected, setIsBackendConnected] = useState(true);
@@ -795,6 +797,22 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
         <button
           type="button"
+          onClick={() => setActiveTab('proposals')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+            activeTab === 'proposals'
+              ? 'bg-[#0866FF] text-white shadow-md shadow-[#0866FF]/20'
+              : 'bg-[#0E131F] text-[#B8C1D1] hover:text-white hover:bg-[#171D2B]'
+          }`}
+        >
+          <FileText className="w-4 h-4 text-[#00CFFF]" />
+          <span>Orçamentos e Propostas</span>
+          <span className="ml-1 px-1.5 py-0.2 rounded-full bg-[#0866FF]/40 text-[#00CFFF] text-[10px] font-bold">
+            Módulo
+          </span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveTab('models')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
             activeTab === 'models'
@@ -849,6 +867,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           <span>API & Integrações</span>
         </button>
       </div>
+
+      {/* TAB: ORÇAMENTOS E PROPOSTAS COMERCIAIS */}
+      {activeTab === 'proposals' && (
+        <ProposalsManager />
+      )}
 
       {/* TAB 1: QUOTES MANAGEMENT */}
       {activeTab === 'quotes' && (

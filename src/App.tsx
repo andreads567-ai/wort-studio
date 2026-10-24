@@ -14,7 +14,9 @@ import { AdminPage } from './pages/AdminPage';
 import { DemoViewerModal } from './components/DemoViewerModal';
 import { QuoteModal } from './components/QuoteModal';
 import { LegalModal } from './components/LegalModal';
-import { DemoModel, PlanItem, ServiceItem, CommercialSettings, ProjectType } from './types';
+import { ProposalsManager } from './components/proposals/ProposalsManager';
+import { ProposalPreviewModal } from './components/proposals/ProposalPreviewModal';
+import { DemoModel, PlanItem, ServiceItem, CommercialSettings, ProjectType, CommercialProposal } from './types';
 import { INITIAL_MODELS, INITIAL_PLANS, INITIAL_SERVICES, INITIAL_SETTINGS } from './data/initialData';
 import { api, buildWhatsAppUrl } from './services/api';
 
@@ -36,6 +38,7 @@ export default function App() {
   const [quoteSelectedPlanName, setQuoteSelectedPlanName] = useState<string | null>(null);
   const [quoteInitialProjectType, setQuoteInitialProjectType] = useState<ProjectType>('site_institucional');
   const [legalModalType, setLegalModalType] = useState<'privacy' | 'terms' | null>(null);
+  const [clientProposalPreview, setClientProposalPreview] = useState<CommercialProposal | null>(null);
 
   // Fetch initial data from server on load
   const loadData = async () => {
@@ -49,6 +52,21 @@ export default function App() {
 
   useEffect(() => {
     loadData();
+
+    // Detecção de visualização direta de proposta comercial via URL / QR Code
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const propostaParam = urlParams.get('proposta') || urlParams.get('proposal');
+      const tabParam = urlParams.get('tab');
+      if (tabParam === 'propostas') {
+        setActiveTab('propostas');
+      }
+      if (propostaParam) {
+        api.getProposal(propostaParam).then(prop => {
+          if (prop) setClientProposalPreview(prop);
+        }).catch(() => {});
+      }
+    }
   }, []);
 
   // Handlers
@@ -175,6 +193,12 @@ export default function App() {
             <ContactPage settings={settings} />
           )}
 
+          {activeTab === 'propostas' && (
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+              <ProposalsManager />
+            </div>
+          )}
+
           {activeTab === 'admin' && (
             <AdminPage
               models={models}
@@ -236,6 +260,14 @@ export default function App() {
         type={legalModalType}
         onClose={() => setLegalModalType(null)}
       />
+
+      {/* Visualizador de Proposta Aberto via Link / QR Code */}
+      {clientProposalPreview && (
+        <ProposalPreviewModal
+          proposal={clientProposalPreview}
+          onClose={() => setClientProposalPreview(null)}
+        />
+      )}
     </div>
   );
 }

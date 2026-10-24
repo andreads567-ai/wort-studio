@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { INITIAL_MODELS, INITIAL_PLANS, INITIAL_SERVICES, INITIAL_SETTINGS } from '../src/data/initialData.js';
-import type { DemoModel, PlanItem, QuoteRequest, CommercialSettings, ServiceItem } from '../src/types/index.js';
+import { DEFAULT_COMPANY_PROFILE, SAMPLE_CLIENT, createDefaultProposal } from '../src/data/proposalTemplates.js';
+import type { DemoModel, PlanItem, QuoteRequest, CommercialSettings, ServiceItem, CommercialProposal, ClientProfile, CompanyProfile } from '../src/types/index.js';
 import type { Storage, SiteContent } from './storage.js';
 
 function sortQuotes(quotes: QuoteRequest[]): QuoteRequest[] {
@@ -407,6 +408,317 @@ export function createSupabaseStorage(supabaseUrl: string, supabaseKey: string):
       } catch (err: any) {
         console.error('[Supabase Storage Exception] deleteQuote:', err?.message || err);
         throw err;
+      }
+    },
+
+    // -------------------------------------------------------------------------
+    // Módulo de Orçamentos e Propostas Comerciais
+    // -------------------------------------------------------------------------
+
+    async listProposals(): Promise<CommercialProposal[]> {
+      try {
+        const { data, error } = await supabase
+          .from('proposals')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && data && data.length > 0) {
+          return data.map(row => ((row.data as CommercialProposal) || row));
+        }
+
+        // Fallback para site_content caso a tabela dedicada não exista ainda
+        const { data: contentRow } = await supabase
+          .from('site_content')
+          .select('value')
+          .eq('key', 'commercial_proposals')
+          .maybeSingle();
+
+        if (contentRow && Array.isArray(contentRow.value) && contentRow.value.length > 0) {
+          return contentRow.value as CommercialProposal[];
+        }
+
+        return [createDefaultProposal()];
+      } catch (err: any) {
+        console.warn('[Supabase Storage] listProposals fallback:', err?.message || err);
+        return [createDefaultProposal()];
+      }
+    },
+
+    async getProposal(id: string): Promise<CommercialProposal | null> {
+      try {
+        const { data, error } = await supabase
+          .from('proposals')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (!error && data) {
+          return ((data.data as CommercialProposal) || data);
+        }
+
+        // Fallback em site_content
+        const list = await this.listProposals();
+        const found = list.find(p => p.id === id);
+        if (found) return found;
+
+        if (id.includes('0001') || id === 'sample') {
+          return createDefaultProposal();
+        }
+
+        return null;
+      } catch (err: any) {
+        console.warn(`[Supabase Storage] getProposal ${id} fallback:`, err?.message || err);
+        return id.includes('0001') ? createDefaultProposal() : null;
+      }
+    },
+
+    async saveProposal(proposal: CommercialProposal): Promise<void> {
+      try {
+        const now = new Date().toISOString();
+        const row = {
+          id: proposal.id,
+          numero: proposal.numero,
+          versao: proposal.versao || 1,
+          status: proposal.status || 'rascunho',
+          created_at: proposal.createdAt || now,
+          updated_at: now,
+          client_id: proposal.cliente?.id || null,
+          client_name: proposal.cliente?.nome || null,
+          client_document: proposal.cliente?.cnpjCpf || null,
+          project_name: proposal.informacoesProjeto?.nomeProjeto || null,
+          total_value: proposal.financeiro?.valorTotal || 0,
+          discount_value: proposal.financeiro?.desconto || 0,
+          final_value: proposal.financeiro?.valorFinal || 0,
+          data: proposal
+        };
+
+        // 1. Tenta gravar na tabela dedicada 'proposals'
+        const { error: upsertErr } = await supabase
+          .from('proposals')
+          .upsert(row, { onConflict: 'id' });
+
+        if (upsertErr) {
+          console.warn('[Supabase Storage] Aviso ao salvar na tabela proposals (usando site_content):', upsertErr.message);
+        }
+
+        // 2. Sempre garante persistência em 'site_content' com key 'commercial_proposals'
+        const { data: currentContent } = await supabase
+          .from('site_content')
+          .select('value')
+          .eq('key', 'commercial_proposals')
+          .maybeSingle();
+
+        let list: CommercialProposal[] = (currentContent?.value && Array.isArray(currentContent.value))
+          ? currentContent.value
+          : [];
+
+        const idx = list.findIndex(p => p.id === proposal.id);
+        if (idx >= 0) list[idx] = proposal;
+        else list.unshift(proposal);
+
+        await supabase.from('site_content').upsert(
+          { key: 'commercial_proposals', value: list, updated_at: now },
+          { onConflict: 'key' }
+        );
+
+        console.log(`[Supabase Storage] Proposta comercial ${proposal.id} (${proposal.numero}) salva com sucesso.`);
+      } catch (err: any) {
+        console.error('[Supabase Storage] Erro ao salvar proposta:', err?.message || err);
+        throw err;
+      }
+    },
+
+    async deleteProposal(id: string): Promise<boolean> {
+      try {
+        await supabase.from('proposals').delete().eq('id', id);
+
+        const { data: currentContent } = await supabase
+          .from('site_content')
+          .select('value')
+          .eq('key', 'commercial_proposals')
+          .maybeSingle();
+
+        if (currentContent?.value && Array.isArray(currentContent.value)) {
+          const list = currentContent.value.filter((p: any) => p.id !== id);
+          await supabase.from('site_content').upsert(
+            { key: 'commercial_proposals', value: list, updated_at: new Date().toISOString() },
+            { onConflict: 'key' }
+          );
+        }
+
+        return true;
+      } catch (err: any) {
+        console.error(`[Supabase Storage] Erro ao excluir proposta ${id}:`, err?.message || err);
+        return false;
+      }
+    },
+
+    async listClients(): Promise<ClientProfile[]> {
+      try {
+        const { data, error } = await supabase
+          .from('clients')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && data && data.length > 0) {
+          return data.map(r => ((r.data as ClientProfile) || r));
+        }
+
+        const { data: contentRow } = await supabase
+          .from('site_content')
+          .select('value')
+          .eq('key', 'commercial_clients')
+          .maybeSingle();
+
+        if (contentRow && Array.isArray(contentRow.value) && contentRow.value.length > 0) {
+          return contentRow.value as ClientProfile[];
+        }
+
+        return [SAMPLE_CLIENT];
+      } catch (err: any) {
+        return [SAMPLE_CLIENT];
+      }
+    },
+
+    async getClient(id: string): Promise<ClientProfile | null> {
+      const list = await this.listClients();
+      return list.find(c => c.id === id) || null;
+    },
+
+    async saveClient(client: ClientProfile): Promise<void> {
+      try {
+        const now = new Date().toISOString();
+        const row = {
+          id: client.id,
+          tipo: client.tipo || 'PJ',
+          nome: client.nome,
+          razao_social: client.razaoSocial || client.nome,
+          cnpj_cpf: client.cnpjCpf,
+          responsavel: client.responsavel || null,
+          cpf_responsavel: client.cpfResponsavel || null,
+          cargo: client.cargo || null,
+          telefone: client.telefone,
+          whatsapp: client.whatsapp || client.telefone,
+          email: client.email,
+          endereco: client.endereco,
+          data: client,
+          updated_at: now
+        };
+
+        try { await supabase.from('clients').upsert(row, { onConflict: 'id' }); } catch {}
+
+        const { data: currentContent } = await supabase
+          .from('site_content')
+          .select('value')
+          .eq('key', 'commercial_clients')
+          .maybeSingle();
+
+        let list: ClientProfile[] = (currentContent?.value && Array.isArray(currentContent.value))
+          ? currentContent.value
+          : [];
+
+        const idx = list.findIndex(c => c.id === client.id);
+        if (idx >= 0) list[idx] = client;
+        else list.unshift(client);
+
+        await supabase.from('site_content').upsert(
+          { key: 'commercial_clients', value: list, updated_at: now },
+          { onConflict: 'key' }
+        );
+      } catch (err: any) {
+        console.error('[Supabase Storage] Erro ao salvar cliente:', err?.message || err);
+      }
+    },
+
+    async deleteClient(id: string): Promise<boolean> {
+      try {
+        await supabase.from('clients').delete().eq('id', id);
+
+        const { data: currentContent } = await supabase
+          .from('site_content')
+          .select('value')
+          .eq('key', 'commercial_clients')
+          .maybeSingle();
+
+        if (currentContent?.value && Array.isArray(currentContent.value)) {
+          const list = currentContent.value.filter((c: any) => c.id !== id);
+          await supabase.from('site_content').upsert(
+            { key: 'commercial_clients', value: list, updated_at: new Date().toISOString() },
+            { onConflict: 'key' }
+          );
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    async getCompanyProfile(): Promise<CompanyProfile> {
+      try {
+        const { data, error } = await supabase
+          .from('company_profile')
+          .select('*')
+          .eq('id', 'default')
+          .maybeSingle();
+
+        if (!error && data) {
+          return ((data.data as CompanyProfile) || {
+            razaoSocial: data.razao_social || DEFAULT_COMPANY_PROFILE.razaoSocial,
+            nomeFantasia: data.nome_fantasia || DEFAULT_COMPANY_PROFILE.nomeFantasia,
+            cnpj: data.cnpj || DEFAULT_COMPANY_PROFILE.cnpj,
+            responsavel: data.responsavel || DEFAULT_COMPANY_PROFILE.responsavel,
+            cargo: data.cargo || DEFAULT_COMPANY_PROFILE.cargo,
+            telefone: data.telefone || DEFAULT_COMPANY_PROFILE.telefone,
+            whatsapp: data.whatsapp || DEFAULT_COMPANY_PROFILE.whatsapp,
+            email: data.email || DEFAULT_COMPANY_PROFILE.email,
+            site: data.site || DEFAULT_COMPANY_PROFILE.site,
+            endereco: data.endereco || DEFAULT_COMPANY_PROFILE.endereco
+          });
+        }
+
+        const { data: contentRow } = await supabase
+          .from('site_content')
+          .select('value')
+          .eq('key', 'company_profile')
+          .maybeSingle();
+
+        if (contentRow && contentRow.value && typeof contentRow.value === 'object') {
+          return contentRow.value as CompanyProfile;
+        }
+
+        return DEFAULT_COMPANY_PROFILE;
+      } catch {
+        return DEFAULT_COMPANY_PROFILE;
+      }
+    },
+
+    async saveCompanyProfile(profile: CompanyProfile): Promise<void> {
+      try {
+        const now = new Date().toISOString();
+        const row = {
+          id: 'default',
+          razao_social: profile.razaoSocial,
+          nome_fantasia: profile.nomeFantasia,
+          cnpj: profile.cnpj,
+          responsavel: profile.responsavel,
+          cargo: profile.cargo,
+          telefone: profile.telefone,
+          whatsapp: profile.whatsapp,
+          email: profile.email,
+          site: profile.site || 'www.wortstudio.com.br',
+          endereco: profile.endereco,
+          data: profile,
+          updated_at: now
+        };
+
+        try { await supabase.from('company_profile').upsert(row, { onConflict: 'id' }); } catch {}
+
+        await supabase.from('site_content').upsert(
+          { key: 'company_profile', value: profile, updated_at: now },
+          { onConflict: 'key' }
+        );
+      } catch (err: any) {
+        console.error('[Supabase Storage] Erro ao salvar perfil da empresa:', err?.message || err);
       }
     },
 

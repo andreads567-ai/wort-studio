@@ -1,4 +1,5 @@
-import { DemoModel, PlanItem, QuoteRequest, CommercialSettings, ServiceItem } from '../types';
+import { DemoModel, PlanItem, QuoteRequest, CommercialSettings, ServiceItem, CommercialProposal, ClientProfile, CompanyProfile, ProposalStatus } from '../types';
+import { DEFAULT_COMPANY_PROFILE, SAMPLE_CLIENT, createDefaultProposal } from '../data/proposalTemplates';
 import { INITIAL_MODELS, INITIAL_PLANS, INITIAL_SERVICES, INITIAL_SETTINGS } from '../data/initialData';
 
 export interface ApiResponse<T> {
@@ -435,6 +436,219 @@ export const api = {
       // ignora falhas de rede no logout
     } finally {
       setStoredAdminToken('');
+    }
+  },
+
+  // =========================================================================
+  // Módulo de Orçamentos e Propostas Comerciais
+  // =========================================================================
+
+  async getCompanyProfile(): Promise<CompanyProfile> {
+    try {
+      const res = await fetch('/api/company-profile');
+      if (res.ok) return await res.json();
+    } catch {}
+    const local = localStorage.getItem('wort_company_profile');
+    return local ? JSON.parse(local) : DEFAULT_COMPANY_PROFILE;
+  },
+
+  async saveCompanyProfile(profile: CompanyProfile): Promise<{ success: boolean; error?: string }> {
+    try {
+      localStorage.setItem('wort_company_profile', JSON.stringify(profile));
+      const res = await adminFetch('/api/company-profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile)
+      });
+      if (res.ok) return { success: true };
+      const errData = await res.json().catch(() => ({}));
+      return { success: false, error: errData.error || 'Erro ao salvar perfil da empresa.' };
+    } catch {
+      return { success: true };
+    }
+  },
+
+  async getClients(): Promise<ClientProfile[]> {
+    try {
+      const res = await adminFetch('/api/clients');
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list) && list.length > 0) {
+          localStorage.setItem('wort_clients', JSON.stringify(list));
+          return list;
+        }
+      }
+    } catch {}
+    const local = localStorage.getItem('wort_clients');
+    return local ? JSON.parse(local) : [SAMPLE_CLIENT];
+  },
+
+  async saveClient(client: ClientProfile): Promise<{ success: boolean; client?: ClientProfile; error?: string }> {
+    try {
+      const res = await adminFetch('/api/clients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(client)
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        return { success: true, client: saved };
+      }
+      const err = await res.json().catch(() => ({}));
+      return { success: false, error: err.error || 'Erro ao salvar cliente.' };
+    } catch {
+      return { success: true, client };
+    }
+  },
+
+  async updateClient(id: string, updates: Partial<ClientProfile>): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await adminFetch(`/api/clients/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      return { success: res.ok };
+    } catch {
+      return { success: true };
+    }
+  },
+
+  async deleteClient(id: string): Promise<boolean> {
+    try {
+      const res = await adminFetch(`/api/clients/${id}`, { method: 'DELETE' });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  async getProposals(): Promise<CommercialProposal[]> {
+    try {
+      const res = await adminFetch('/api/proposals');
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list) && list.length > 0) {
+          localStorage.setItem('wort_proposals', JSON.stringify(list));
+          return list;
+        }
+      }
+    } catch {}
+    const local = localStorage.getItem('wort_proposals');
+    return local ? JSON.parse(local) : [createDefaultProposal()];
+  },
+
+  async getProposal(id: string): Promise<CommercialProposal | null> {
+    try {
+      const res = await fetch(`/api/proposals/${id}`);
+      if (res.ok) return await res.json();
+    } catch {}
+    const proposals = await this.getProposals();
+    return proposals.find(p => p.id === id) || (id.includes('0001') ? createDefaultProposal() : null);
+  },
+
+  async saveProposal(proposal: CommercialProposal): Promise<{ success: boolean; proposal?: CommercialProposal; error?: string }> {
+    try {
+      const res = await adminFetch('/api/proposals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(proposal)
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        return { success: true, proposal: saved };
+      }
+      const err = await res.json().catch(() => ({}));
+      return { success: false, error: err.error || 'Erro ao salvar proposta.' };
+    } catch {
+      return { success: true, proposal };
+    }
+  },
+
+  async updateProposal(id: string, proposal: Partial<CommercialProposal>): Promise<{ success: boolean; proposal?: CommercialProposal; error?: string }> {
+    try {
+      const res = await adminFetch(`/api/proposals/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(proposal)
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        return { success: true, proposal: updated };
+      }
+      const err = await res.json().catch(() => ({}));
+      return { success: false, error: err.error || 'Erro ao atualizar proposta.' };
+    } catch {
+      return { success: true, proposal: proposal as CommercialProposal };
+    }
+  },
+
+  async duplicateProposal(id: string): Promise<{ success: boolean; proposal?: CommercialProposal; error?: string }> {
+    try {
+      const res = await adminFetch(`/api/proposals/${id}/duplicate`, { method: 'POST' });
+      if (res.ok) {
+        const duplicated = await res.json();
+        return { success: true, proposal: duplicated };
+      }
+      const err = await res.json().catch(() => ({}));
+      return { success: false, error: err.error || 'Erro ao duplicar proposta.' };
+    } catch {
+      return { success: false, error: 'Erro de conexão.' };
+    }
+  },
+
+  async updateProposalStatus(id: string, status: ProposalStatus, motivo?: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await adminFetch(`/api/proposals/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, motivo })
+      });
+      return { success: res.ok };
+    } catch {
+      return { success: false, error: 'Erro de conexão.' };
+    }
+  },
+
+  async approveProposal(
+    id: string,
+    data: {
+      nome: string;
+      cargo?: string;
+      email?: string;
+      cpf?: string;
+      assinaturaTexto?: string;
+      assinaturaBase64?: string;
+      concordancia: boolean;
+    }
+  ): Promise<{ success: boolean; hash?: string; aprovadoEm?: string; error?: string; proposal?: CommercialProposal }> {
+    try {
+      const res = await fetch(`/api/proposals/${id}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      const result = await res.json().catch(() => ({}));
+      if (res.ok) {
+        return {
+          success: true,
+          hash: result.hash,
+          aprovadoEm: result.aprovadoEm,
+          proposal: result.proposal
+        };
+      }
+      return { success: false, error: result.error || 'Erro ao registrar aprovação da proposta.' };
+    } catch {
+      return { success: false, error: 'Erro ao conectar ao servidor de aprovação digital.' };
+    }
+  },
+
+  async deleteProposal(id: string): Promise<boolean> {
+    try {
+      const res = await adminFetch(`/api/proposals/${id}`, { method: 'DELETE' });
+      return res.ok;
+    } catch {
+      return false;
     }
   },
 
