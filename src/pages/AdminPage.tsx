@@ -94,12 +94,24 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
   // Settings Management State
   const [settingsForm, setSettingsForm] = useState<CommercialSettings>(initialSettings);
+  const [adminSettingsLoaded, setAdminSettingsLoaded] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
+  const [storageKind, setStorageKind] = useState<string>('');
+  const [updatingQuoteId, setUpdatingQuoteId] = useState<string | null>(null);
+  const [isSavingApiSettings, setIsSavingApiSettings] = useState(false);
 
   const loadSettings = async () => {
     try {
+      console.log('[Admin] Carregando credenciais e configurações salvas no banco de dados...');
       const data = await api.getAdminSettings();
       if (data) {
+        console.log('[Admin] Configurações recuperadas com sucesso do banco:', {
+          hasClientId: Boolean(data.zohoClientId),
+          hasClientSecret: Boolean(data.zohoClientSecret),
+          hasRefreshToken: Boolean(data.zohoRefreshToken),
+          user: data.zohoUser
+        });
+        setAdminSettingsLoaded(true);
         setSettingsForm(prev => ({
           ...prev,
           ...data,
@@ -107,38 +119,54 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           zohoAccessToken: (data as any).accessToken || data.zohoAccessToken || prev.zohoAccessToken || '',
           zohoClientId: data.zohoClientId || prev.zohoClientId || '',
           zohoClientSecret: data.zohoClientSecret || prev.zohoClientSecret || '',
-          zohoUser: data.zohoUser || prev.zohoUser || 'wort.studio@aliandre.com.br'
+          zohoUser: data.zohoUser || prev.zohoUser || 'wort.studio@aliandre.com.br',
+          zohoAuthType: ((data.zohoClientId || data.zohoRefreshToken) && !data.zohoPass) ? 'oauth2' : (data.zohoAuthType || 'oauth2')
         }));
       }
     } catch (err) {
-      console.error('Falha ao sincronizar configurações', err);
+      console.error('[Admin] Falha ao sincronizar configurações com o banco:', err);
     }
   };
 
   useEffect(() => {
-    // Obrigatório solicitar senha em qualquer atualização ou recarregamento da página
-    sessionStorage.removeItem('wort_admin_token');
-    setIsAuthenticated(false);
+    const existing = api.getStoredAdminToken ? api.getStoredAdminToken() : sessionStorage.getItem('wort_admin_session_token');
+    if (existing) {
+      setIsAuthenticated(true);
+      loadQuotes();
+      loadSettings();
+      onRefreshData();
+    }
+    api.getHealthInfo().then(info => {
+      if (info.storage) setStorageKind(info.storage);
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
     setModels(initialModels);
     setPlans(initialPlans);
     setSettingsForm(prev => {
+      if (adminSettingsLoaded) {
+        return prev;
+      }
       // Os dados públicos (/api/data) não trazem senha nem credenciais do Zoho.
-      // Atualiza apenas os campos públicos e preserva os sensíveis já carregados pela sessão admin.
+      // Atualiza apenas os campos públicos antes do carregamento completo da sessão admin.
       const publicFields = Object.fromEntries(
         Object.entries(initialSettings).filter(
           ([key]) => key !== 'adminPasswordHash' && !key.startsWith('zoho')
         )
       ) as Partial<CommercialSettings>;
-      return { ...initialSettings, ...prev, ...publicFields };
+      return { ...initialSettings, ...publicFields, ...prev };
     });
-  }, [initialModels, initialPlans, initialSettings]);
+  }, [initialModels, initialPlans, initialSettings, adminSettingsLoaded]);
 
   useEffect(() => {
-    if (isAuthenticated && (activeTab === 'api' || activeTab === 'settings')) {
+    if (!isAuthenticated) return;
+    if (activeTab === 'quotes') {
+      loadQuotes();
+    } else if (activeTab === 'api' || activeTab === 'settings') {
       loadSettings();
+    } else if (activeTab === 'models' || activeTab === 'plans') {
+      onRefreshData();
     }
   }, [activeTab, isAuthenticated]);
 
@@ -168,6 +196,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       setPasswordInput('');
       loadQuotes();
       loadSettings();
+      api.getHealthInfo().then(info => {
+        if (info.storage) setStorageKind(info.storage);
+      }).catch(() => {});
     } else {
       setAuthError(res.error || 'Senha incorreta. Verifique suas credenciais.');
     }
@@ -178,6 +209,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     api.adminLogout();
     setIsAuthenticated(false);
     sessionStorage.removeItem('wort_admin_token');
+    sessionStorage.removeItem('wort_admin_session_token');
     setPasswordInput('');
     setAuthError('');
   };
@@ -232,14 +264,34 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
   // Status changer for quotes with Zoho Mail notification option
   const handleUpdateQuoteStatus = async (quoteId: string, newStatus: QuoteRequest['status']) => {
-    const res = await api.updateQuoteStatus(quoteId, newStatus, undefined, notifyCustomerOnStatusChange);
-    setQuotes(prev =>
-      prev.map(q => (q.id === quoteId ? { ...q, status: newStatus } : q))
-    );
-    if (res.clientNotified) {
-      showNotice(`Status alterado para "${getStatusLabel(newStatus)}" e notificação por e-mail enviada via Zoho ao cliente!`);
-    } else {
-      showNotice(`Status do orçamento atualizado para "${getStatusLabel(newStatus)}"!`);
+    setUpdatingQuoteId(quoteId);
+    try {
+      console.log(`[Admin] Atualizando status do orçamento ${quoteId} para "${newStatus}" no banco de dados...`);
+      const res = await api.updateQuoteStatus(quoteId, newStatus, undefined, notifyCustomerOnStatusChange);
+      
+      if (!res.success) {
+        const errorMsg = res.error || 'Falha ao persistir alteração no banco de dados.';
+        console.error(`[Admin Error] Falha ao atualizar status:`, errorMsg);
+        alert(`Erro ao salvar status no banco de dados: ${errorMsg}`);
+        return;
+      }
+
+      // SÓ altera o estado visual (useState) APÓS o banco responder com sucesso!
+      setQuotes(prev =>
+        prev.map(q => (q.id === quoteId ? { ...q, status: newStatus } : q))
+      );
+
+      console.log(`[Admin Success] Status do orçamento ${quoteId} atualizado com sucesso no banco.`);
+      if (res.clientNotified) {
+        showNotice(`Status alterado para "${getStatusLabel(newStatus)}" e notificação por e-mail enviada via Zoho ao cliente!`);
+      } else {
+        showNotice(`Status do orçamento atualizado para "${getStatusLabel(newStatus)}"!`);
+      }
+    } catch (err: any) {
+      console.error('[Admin Exception] Erro ao atualizar status:', err);
+      alert(`Erro inesperado ao salvar status no banco de dados: ${err?.message || err}`);
+    } finally {
+      setUpdatingQuoteId(null);
     }
   };
 
@@ -291,23 +343,36 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     setIsExchangingCode(true);
     setExchangeResult(null);
 
-    const res = await api.exchangeZohoToken(grantCodeInput.trim(), settingsForm.zohoRedirectUri);
-    setExchangeResult(res);
-    setIsExchangingCode(false);
+    try {
+      console.log('[Admin] Iniciando troca do Grant Token Zoho pela API...');
+      const res = await api.exchangeZohoToken(grantCodeInput.trim(), settingsForm.zohoRedirectUri);
+      setExchangeResult(res);
 
-    if (res.success) {
-      if (res.refreshToken) {
-        setSettingsForm(prev => ({
-          ...prev,
-          zohoRefreshToken: res.refreshToken,
-          zohoAccessToken: res.accessToken || prev.zohoAccessToken,
-          zohoAuthType: 'oauth2'
-        }));
+      if (res.success) {
+        console.log('[Admin Success] Tokens da API Zoho trocados e salvos com sucesso.');
+        if (res.refreshToken) {
+          setSettingsForm(prev => ({
+            ...prev,
+            zohoRefreshToken: res.refreshToken,
+            zohoAccessToken: res.accessToken || prev.zohoAccessToken,
+            zohoAuthType: 'oauth2'
+          }));
+        }
+        setGrantCodeInput('');
+        await loadSettings();
+        onRefreshData();
+        showNotice('Tokens da API Zoho gerados e gravados permanentemente no banco de dados!');
+      } else {
+        console.error('[Admin Error] Falha ao trocar token Zoho:', res.error);
       }
-      setGrantCodeInput('');
-      await loadSettings();
-      onRefreshData();
-      showNotice('Tokens da API Zoho gerados e salvos com sucesso!');
+    } catch (err: any) {
+      console.error('[Admin Exception] Erro ao trocar token Zoho:', err);
+      setExchangeResult({
+        success: false,
+        error: `Erro ao conectar com a API: ${err?.message || err}`
+      });
+    } finally {
+      setIsExchangingCode(false);
     }
   };
 
@@ -324,17 +389,35 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       return;
     }
 
-    const res = await api.updateSettings({
-      ...settingsForm,
-      adminPasswordHash: cleanPassword
-    });
+    setIsSavingApiSettings(true);
+    try {
+      console.log('[Admin] Gravando credenciais de API no banco de dados...', {
+        clientId: settingsForm.zohoClientId ? `${settingsForm.zohoClientId.slice(0, 8)}...` : '(vazio)',
+        hasClientSecret: Boolean(settingsForm.zohoClientSecret),
+        hasRefreshToken: Boolean(settingsForm.zohoRefreshToken),
+        user: settingsForm.zohoUser
+      });
 
-    if (res.success) {
-      await loadSettings();
-      onRefreshData();
-      showNotice('Configurações de API & integração com Zoho Mail salvas com sucesso!');
-    } else {
-      alert(res.error || 'Erro ao salvar configurações de API.');
+      const res = await api.updateSettings({
+        ...settingsForm,
+        adminPasswordHash: cleanPassword
+      });
+
+      if (res.success) {
+        console.log('[Admin Success] Credenciais de API salvas com sucesso no banco de dados.');
+        await loadSettings();
+        onRefreshData();
+        showNotice('Configurações de API & integração com Zoho Mail salvas com sucesso no banco de dados!');
+      } else {
+        const errorMsg = res.error || 'Erro ao salvar configurações de API no banco de dados.';
+        console.error('[Admin Error] Erro ao salvar configurações:', errorMsg);
+        alert(errorMsg);
+      }
+    } catch (err: any) {
+      console.error('[Admin Exception] Erro ao salvar credenciais:', err);
+      alert(`Falha ao salvar credenciais no banco: ${err?.message || err}`);
+    } finally {
+      setIsSavingApiSettings(false);
     }
   };
 
@@ -346,8 +429,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
   const handleDeleteQuote = async (quoteId: string) => {
     if (window.confirm('Tem certeza que deseja excluir esta solicitação de orçamento?')) {
-      await api.deleteQuote(quoteId);
-      setQuotes(prev => prev.filter(q => q.id !== quoteId));
+      try {
+        const ok = await api.deleteQuote(quoteId);
+        if (ok) {
+          setQuotes(prev => prev.filter(q => q.id !== quoteId));
+          showNotice('Solicitação de orçamento excluída com sucesso do banco de dados!');
+        } else {
+          alert('Não foi possível excluir o registro do banco de dados.');
+        }
+      } catch (err: any) {
+        console.error('Erro ao excluir orçamento:', err);
+        alert(`Erro ao excluir orçamento: ${err?.message || err}`);
+      }
     }
   };
 
@@ -356,24 +449,42 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     e.preventDefault();
     if (!editingModel) return;
 
-    await api.saveModel(editingModel, !isNewModel);
-    if (isNewModel) {
-      setModels(prev => [editingModel, ...prev]);
-    } else {
-      setModels(prev => prev.map(m => (m.id === editingModel.id ? editingModel : m)));
+    try {
+      const ok = await api.saveModel(editingModel, !isNewModel);
+      if (ok) {
+        if (isNewModel) {
+          setModels(prev => [editingModel, ...prev]);
+        } else {
+          setModels(prev => prev.map(m => (m.id === editingModel.id ? editingModel : m)));
+        }
+        setEditingModel(null);
+        setIsNewModel(false);
+        onRefreshData();
+        showNotice('Modelo demonstrativo salvo com sucesso no banco de dados!');
+      } else {
+        alert('Erro ao salvar modelo no banco de dados.');
+      }
+    } catch (err: any) {
+      console.error('Erro ao salvar modelo:', err);
+      alert(`Falha ao salvar modelo: ${err?.message || err}`);
     }
-    setEditingModel(null);
-    setIsNewModel(false);
-    onRefreshData();
-    showNotice('Modelo demonstrativo salvo com sucesso no banco de dados!');
   };
 
   const handleDeleteModel = async (modelId: string) => {
     if (window.confirm('Deseja realmente remover este modelo do catálogo?')) {
-      await api.deleteModel(modelId);
-      setModels(prev => prev.filter(m => m.id !== modelId));
-      onRefreshData();
-      showNotice('Modelo removido com sucesso!');
+      try {
+        const ok = await api.deleteModel(modelId);
+        if (ok) {
+          setModels(prev => prev.filter(m => m.id !== modelId));
+          onRefreshData();
+          showNotice('Modelo removido com sucesso!');
+        } else {
+          alert('Erro ao remover modelo do banco de dados.');
+        }
+      } catch (err: any) {
+        console.error('Erro ao remover modelo:', err);
+        alert(`Falha ao remover modelo: ${err?.message || err}`);
+      }
     }
   };
 
@@ -382,11 +493,20 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     e.preventDefault();
     if (!editingPlan) return;
 
-    await api.updatePlan(editingPlan);
-    setPlans(prev => prev.map(p => (p.id === editingPlan.id ? editingPlan : p)));
-    setEditingPlan(null);
-    onRefreshData();
-    showNotice('Informações comerciais do plano atualizadas com sucesso!');
+    try {
+      const ok = await api.updatePlan(editingPlan);
+      if (ok) {
+        setPlans(prev => prev.map(p => (p.id === editingPlan.id ? editingPlan : p)));
+        setEditingPlan(null);
+        onRefreshData();
+        showNotice('Informações comerciais do plano atualizadas com sucesso no banco de dados!');
+      } else {
+        alert('Erro ao atualizar plano no banco de dados.');
+      }
+    } catch (err: any) {
+      console.error('Erro ao atualizar plano:', err);
+      alert(`Falha ao atualizar plano: ${err?.message || err}`);
+    }
   };
 
   // Settings Save
@@ -402,16 +522,22 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       return;
     }
 
-    const res = await api.updateSettings({
-      ...settingsForm,
-      adminPasswordHash: cleanPassword
-    });
+    try {
+      const res = await api.updateSettings({
+        ...settingsForm,
+        adminPasswordHash: cleanPassword
+      });
 
-    if (res.success) {
-      onRefreshData();
-      showNotice('Configurações comerciais e senha de acesso salvas com sucesso!');
-    } else {
-      alert(res.error || 'Erro ao salvar configurações no servidor.');
+      if (res.success) {
+        await loadSettings();
+        onRefreshData();
+        showNotice('Configurações comerciais e senha de acesso salvas com sucesso no banco de dados!');
+      } else {
+        alert(res.error || 'Erro ao salvar configurações no servidor.');
+      }
+    } catch (err: any) {
+      console.error('Erro ao salvar configurações comerciais:', err);
+      alert(`Falha ao salvar configurações: ${err?.message || err}`);
     }
   };
 
@@ -513,9 +639,19 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               <h1 className="text-lg font-bold text-white tracking-tight">
                 Painel Administrativo WortSite
               </h1>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono text-[10px] flex items-center gap-1">
+              <span className={`text-xs px-2 py-0.5 rounded-full font-mono text-[10px] flex items-center gap-1 ${
+                storageKind === 'supabase'
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-[#00CFFF]/20 text-[#00CFFF] border border-[#00CFFF]/30'
+              }`}>
                 <Database className="w-3 h-3" />
-                {isBackendConnected ? 'Backend Express Ativo' : 'Armazenamento Local'}
+                {storageKind === 'supabase'
+                  ? 'Supabase Conectado'
+                  : storageKind === 'redis'
+                  ? 'Redis Ativo'
+                  : storageKind === 'file'
+                  ? 'Banco Local JSON'
+                  : isBackendConnected ? 'Backend Ativo' : 'Armazenamento Local'}
               </span>
             </div>
             <p className="text-xs text-[#B8C1D1]">
@@ -702,14 +838,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                           <span className="text-[10px] text-[#B8C1D1]/70 uppercase font-semibold hidden sm:inline">Status:</span>
                           <select
                             value={quote.status}
+                            disabled={updatingQuoteId === quote.id}
                             onChange={(e) => handleUpdateQuoteStatus(quote.id, e.target.value as QuoteRequest['status'])}
-                            className="px-2.5 py-1.5 rounded-lg bg-[#171D2B] border border-[#222B3D] text-xs text-white focus:outline-none focus:ring-1 focus:ring-[#0866FF] cursor-pointer"
+                            className="px-2.5 py-1.5 rounded-lg bg-[#171D2B] border border-[#222B3D] text-xs text-white focus:outline-none focus:ring-1 focus:ring-[#0866FF] cursor-pointer disabled:opacity-50"
                           >
                             <option value="pendente">Pendente</option>
                             <option value="em_analise">Em Análise</option>
                             <option value="proposta_enviada">Proposta Enviada</option>
                             <option value="concluido">Conclusão</option>
                           </select>
+                          {updatingQuoteId === quote.id && (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#00CFFF]" />
+                          )}
                         </div>
 
                         <button
@@ -1301,7 +1441,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   <Server className="w-3 h-3" />
                   API REST v1.0.0
                 </span>
-                {settingsForm.zohoUser && settingsForm.zohoPass ? (
+                {(settingsForm.zohoAuthType !== 'smtp'
+                  ? Boolean(settingsForm.zohoClientId && settingsForm.zohoClientSecret && settingsForm.zohoRefreshToken)
+                  : Boolean(settingsForm.zohoUser && settingsForm.zohoPass)) ? (
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
                     <CheckCircle className="w-3 h-3" />
                     Zoho Configurado
@@ -1646,10 +1788,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               <div className="pt-2">
                 <button
                   type="submit"
-                  className="px-6 py-3 rounded-xl bg-[#0866FF] hover:bg-[#0654D4] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 cursor-pointer shadow-lg shadow-[#0866FF]/25 transition-all"
+                  disabled={isSavingApiSettings}
+                  className="px-6 py-3 rounded-xl bg-[#0866FF] hover:bg-[#0654D4] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 cursor-pointer shadow-lg shadow-[#0866FF]/25 transition-all disabled:opacity-50"
                 >
-                  <Save className="w-4 h-4" />
-                  Salvar Credenciais da API Zoho
+                  <Save className={`w-4 h-4 ${isSavingApiSettings ? 'animate-spin' : ''}`} />
+                  {isSavingApiSettings ? 'Gravando no Banco de Dados...' : 'Salvar Credenciais da API Zoho'}
                 </button>
               </div>
             </form>

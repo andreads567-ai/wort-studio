@@ -12,6 +12,7 @@ import path from 'path';
 import { Redis } from '@upstash/redis';
 import { INITIAL_MODELS, INITIAL_PLANS, INITIAL_SERVICES, INITIAL_SETTINGS } from '../src/data/initialData.js';
 import type { DemoModel, PlanItem, QuoteRequest, CommercialSettings, ServiceItem } from '../src/types/index.js';
+import { createSupabaseStorage } from './supabaseStorage.js';
 
 export interface SiteContent {
   models: DemoModel[];
@@ -21,12 +22,13 @@ export interface SiteContent {
 }
 
 export interface Storage {
-  readonly kind: 'redis' | 'file' | 'memory';
+  readonly kind: 'supabase' | 'redis' | 'file' | 'memory';
   getContent(): Promise<SiteContent>;
   saveContent(content: SiteContent): Promise<void>;
   listQuotes(): Promise<QuoteRequest[]>;
   getQuote(id: string): Promise<QuoteRequest | null>;
   saveQuote(quote: QuoteRequest): Promise<void>;
+  updateQuoteStatus?(id: string, status: QuoteRequest['status'], adminNotes?: string): Promise<QuoteRequest | null>;
   deleteQuote(id: string): Promise<boolean>;
   /** Incrementa e retorna o número de tentativas de login falhas do IP dentro da janela. */
   registerLoginFailure(ip: string, windowMs: number): Promise<number>;
@@ -100,6 +102,15 @@ function createRedisStorage(url: string, token: string): Storage {
       await redis.hset(KEY_QUOTES, { [quote.id]: quote });
     },
 
+    async updateQuoteStatus(id, status, adminNotes) {
+      const quote = (await redis.hget<QuoteRequest>(KEY_QUOTES, id)) || null;
+      if (!quote) return null;
+      quote.status = status;
+      if (adminNotes !== undefined) quote.adminNotes = adminNotes;
+      await redis.hset(KEY_QUOTES, { [id]: quote });
+      return quote;
+    },
+
     async deleteQuote(id) {
       return (await redis.hdel(KEY_QUOTES, id)) > 0;
     },
@@ -161,6 +172,14 @@ function createMemoryStorage(): Storage {
       const index = quotes.findIndex(q => q.id === quote.id);
       if (index === -1) quotes.unshift(quote);
       else quotes[index] = quote;
+    },
+
+    async updateQuoteStatus(id, status, adminNotes) {
+      const quote = quotes.find(q => q.id === id);
+      if (!quote) return null;
+      quote.status = status;
+      if (adminNotes !== undefined) quote.adminNotes = adminNotes;
+      return quote;
     },
 
     async deleteQuote(id) {
@@ -264,6 +283,16 @@ function createFileStorage(): Storage {
       write(db);
     },
 
+    async updateQuoteStatus(id, status, adminNotes) {
+      const db = read();
+      const quote = db.quotes.find(q => q.id === id);
+      if (!quote) return null;
+      quote.status = status;
+      if (adminNotes !== undefined) quote.adminNotes = adminNotes;
+      write(db);
+      return quote;
+    },
+
     async deleteQuote(id) {
       const db = read();
       const before = db.quotes.length;
@@ -293,19 +322,52 @@ function createFileStorage(): Storage {
 }
 
 // ---------------------------------------------------------------------------
+const DEFAULT_SUPABASE_URL = 'https://incrhyxhwfmvytjpncts.supabase.co';
+const DEFAULT_SUPABASE_SERVICE_ROLE_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluY3JoeXhod2Ztdnl0anBuY3RzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5Mjc4MDA1NiwiZXhwIjoyMTA4MzU2MDU2fQ.WvwiGZe2WvS4rxXVDX8WCWzpfI_pKkxn-7WOPNQ5s8U';
+
 let instance: Storage | null = null;
+
+export function resetStorageInstance() {
+  instance = null;
+}
 
 export function getStorage(): Storage {
   if (instance) return instance;
 
+  const supabaseUrl = (
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    DEFAULT_SUPABASE_URL
+  ).trim();
+
+  // Prioriza a chave JWT service_role (acesso total ao PostgREST sem bloqueio de RLS)
+  const envServiceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const envSecretKey = (process.env.SUPABASE_SECRET_KEY || '').trim();
+  const supabaseKey = (
+    (envServiceKey.startsWith('eyJ') ? envServiceKey : '') ||
+    (envSecretKey.startsWith('eyJ') ? envSecretKey : '') ||
+    DEFAULT_SUPABASE_SERVICE_ROLE_KEY ||
+    envSecretKey ||
+    process.env.SUPABASE_KEY ||
+    process.env.SUPABASE_PUBLISHABLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    ''
+  ).trim();
+
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 
-  if (url && token) {
+  if (supabaseUrl && supabaseKey) {
+    console.log(`[Storage] Inicializando conexão oficial com Supabase: ${supabaseUrl}`);
+    instance = createSupabaseStorage(supabaseUrl, supabaseKey);
+  } else if (url && token) {
+    console.log('[Storage] Inicializando Upstash Redis');
     instance = createRedisStorage(url, token);
   } else if (process.env.VERCEL) {
-    // Na Vercel sem Redis configurado, opera em memória para garantir que login e visualização nunca quebrem
-    instance = createMemoryStorage();
+    console.warn('[Storage] Fallback para Supabase padrão na Vercel.');
+    instance = createSupabaseStorage(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_SERVICE_ROLE_KEY);
   } else {
     instance = createFileStorage();
   }

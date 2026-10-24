@@ -8,16 +8,50 @@ export interface ApiResponse<T> {
 }
 
 // Token da sessão administrativa (mantido apenas em memória; exige novo login ao recarregar a página)
-let adminToken = '';
+let adminToken = typeof window !== 'undefined' ? (sessionStorage.getItem('wort_admin_session_token') || '') : '';
+
+export function getStoredAdminToken(): string {
+  if (!adminToken && typeof window !== 'undefined') {
+    adminToken = sessionStorage.getItem('wort_admin_session_token') || '';
+  }
+  return adminToken;
+}
+
+export function setStoredAdminToken(token: string) {
+  adminToken = token;
+  if (typeof window !== 'undefined') {
+    if (token) {
+      sessionStorage.setItem('wort_admin_session_token', token);
+    } else {
+      sessionStorage.removeItem('wort_admin_session_token');
+    }
+  }
+}
 
 /** fetch autenticado para rotas administrativas protegidas no servidor. */
 function adminFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (adminToken) headers.set('Authorization', `Bearer ${adminToken}`);
+  const token = getStoredAdminToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
   return fetch(url, { ...init, headers });
 }
 
 export const api = {
+  getStoredAdminToken,
+  setStoredAdminToken,
+  async getHealthInfo(): Promise<{ ok: boolean; storage?: string; supabaseConnected?: boolean }> {
+    try {
+      const res = await fetch('/api/health');
+      if (res.ok) {
+        const data = await res.json();
+        return { ok: true, storage: data.storage, supabaseConnected: data.supabaseConnected };
+      }
+      return { ok: false };
+    } catch {
+      return { ok: false };
+    }
+  },
+
   async checkHealth(): Promise<boolean> {
     try {
       const res = await fetch('/api/health');
@@ -146,13 +180,14 @@ export const api = {
         const data = await res.json();
         return { success: true, clientNotified: data.clientNotified };
       }
-      return { success: false, error: 'Falha ao atualizar no servidor' };
+      const errData = await res.json().catch(() => ({}));
+      return { success: false, error: errData.error || `Falha ao persistir no servidor (HTTP ${res.status})` };
     } catch {
       // Local fallback
       const localQuotes: QuoteRequest[] = JSON.parse(localStorage.getItem('wort_quotes') || '[]');
       const updated = localQuotes.map(q => (q.id === id ? { ...q, status, adminNotes } : q));
       localStorage.setItem('wort_quotes', JSON.stringify(updated));
-      return { success: true };
+      return { success: false, error: 'Falha de comunicação com o servidor. A alteração não foi salva no banco de dados.' };
     }
   },
 
@@ -285,7 +320,7 @@ export const api = {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         // Ao trocar a senha, o servidor invalida as sessões antigas e devolve um novo token
-        if (data.newAdminToken) adminToken = data.newAdminToken;
+        if (data.newAdminToken) setStoredAdminToken(data.newAdminToken);
         return { success: true };
       }
       return { success: false, error: data.error || 'Erro ao salvar configurações no servidor.' };
@@ -308,7 +343,7 @@ export const api = {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.token) {
-        adminToken = data.token;
+        setStoredAdminToken(data.token);
         return { success: true };
       }
       return { success: false, error: data.error || 'Senha incorreta.' };
@@ -323,7 +358,7 @@ export const api = {
     } catch {
       // ignora falhas de rede no logout
     } finally {
-      adminToken = '';
+      setStoredAdminToken('');
     }
   },
 

@@ -1,9 +1,9 @@
 import type { DemoModel, PlanItem, ServiceItem, CommercialSettings } from '../types/index.js';
 
 export const INITIAL_SETTINGS: CommercialSettings = {
-  whatsappNumber: '5511987654321', // Configurable in the Admin panel
-  whatsappDisplay: '(11) 98765-4321',
-  contactEmail: 'contato@wortsite.com.br',
+  whatsappNumber: '5566999129561', // Configurable in the Admin panel
+  whatsappDisplay: '66999129561',
+  contactEmail: 'wort.studio@aliandre.com.br',
   businessHours: 'Segunda a Sexta, das 09h às 18h',
   addressCity: 'São Paulo - SP (Atendimento Nacional Remoto)',
   sloganPrincipal: 'Transforme sua ideia em um site profissional.',
@@ -14,16 +14,16 @@ export const INITIAL_SETTINGS: CommercialSettings = {
   zohoAuthType: 'oauth2',
   zohoHost: 'smtp.zoho.com',
   zohoPort: 465,
-  zohoUser: 'andredesouza@aliandre.com.br',
+  zohoUser: 'wort.studio@aliandre.com.br',
   zohoPass: '',
-  zohoClientId: '',
-  zohoClientSecret: '',
-  zohoAccountId: '',
-  zohoRefreshToken: '',
-  zohoAccessToken: '',
+  zohoClientId: '1000.RCP0469ROY7U0K59RX44SZU5PMEVLM',
+  zohoClientSecret: 'b48faedab0f955204ee6ca01d47265871ce36a27a1',
+  zohoAccountId: '5000670000000008002',
+  zohoRefreshToken: '1000.35bb192fb213e7398e6338bb4fd025e0.7d34bca7efc764bb36081c625eb3b7e3',
+  zohoAccessToken: '1000.02028faed0cabaf71c2a557b5da6f667.322707266841d30dc4ed3fda34b88f20',
   zohoRedirectUri: 'https://wortsite.com.br',
   zohoSenderName: 'WortSite Studio',
-  zohoAlertRecipient: 'andredesouza@aliandre.com.br',
+  zohoAlertRecipient: 'wort.studio@aliandre.com.br',
   zohoEnabled: true,
 };
 

@@ -10,9 +10,12 @@
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit",
-    "migrate:redis": "tsx scripts/migrate-to-redis.ts"
+    "migrate:redis": "tsx scripts/migrate-to-redis.ts",
+    "migrate:supabase": "tsx scripts/migrate-to-supabase.ts"
   },
   "dependencies": {
+    "@supabase/server": "^1.9.2",
+    "@supabase/supabase-js": "^2.118.0",
     "@tailwindcss/vite": "^4.3.3",
     "@upstash/redis": "^1.39.0",
     "@vercel/functions": "^3.10.3",
