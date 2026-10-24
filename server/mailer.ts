@@ -312,30 +312,28 @@ export async function dispatchZohoEmail(settings: CommercialSettings, options: M
     };
 
     try {
-      // 1. Tenta enviar prioritariamente com o e-mail configurado pelo usuário se houver; se não houver, usa officialMailbox
-      const firstSender = configuredUser || officialMailbox || 'andredesouza@aliandre.com.br';
-      let res = await trySendWithToken(token, accountId, firstSender);
+      // Prioriza o envio com a mailbox oficial autenticada no Zoho (ex: andredesouza@aliandre.com.br),
+      // evitando erros HTTP 500 e re-tentativas desnecessárias. O inReplyTo direciona respostas para configuredUser!
+      const primarySender = officialMailbox || configuredUser || 'andredesouza@aliandre.com.br';
+      let res = await trySendWithToken(token, accountId, primarySender);
       let text = await res.text();
       let data: any = {};
       try { data = JSON.parse(text); } catch { /* ignore */ }
 
-      // 2. Se o token expirou (401) ou inválido, renova e tenta de novo
+      // Se o token expirou (401), renova e tenta de novo
       if (res.status === 401 || data.error === 'invalid_token') {
         const refreshed = await refreshZohoAccessToken(settings);
         token = refreshed.accessToken;
         if (refreshed.accountId) accountId = refreshed.accountId;
         if (refreshed.mailboxAddress) officialMailbox = refreshed.mailboxAddress;
-        res = await trySendWithToken(token, accountId, firstSender);
+        res = await trySendWithToken(token, accountId, officialMailbox || primarySender);
         text = await res.text();
         try { data = JSON.parse(text); } catch { /* ignore */ }
       }
 
-      // 3. Se o Zoho rejeitou porque o e-mail não é remetente cadastrado na conta Zoho (ex: status 500 "Este Endereço de Remetente não existe!"),
-      // faz fallback AUTOMÁTICO e TRANSPARENTE para o mailbox oficial autenticado da conta Zoho (ex: andredesouza@aliandre.com.br)
-      // mantendo inReplyTo configurado para configuredUser!
-      if (!res.ok && officialMailbox && firstSender !== officialMailbox) {
-        console.warn(`[Zoho Mail] Remetente '${firstSender}' rejeitado pelo Zoho (${res.status}). Realizando fallback automático para mailbox autenticada '${officialMailbox}' (inReplyTo: '${configuredUser}')...`);
-        res = await trySendWithToken(token, accountId, officialMailbox);
+      // Fallback alternativo caso primarySender tenha falhado
+      if (!res.ok && configuredUser && configuredUser !== primarySender) {
+        res = await trySendWithToken(token, accountId, configuredUser);
         text = await res.text();
         try { data = JSON.parse(text); } catch { /* ignore */ }
       }

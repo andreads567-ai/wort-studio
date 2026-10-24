@@ -384,43 +384,67 @@ export function createApp() {
       });
     }
 
-    // Resposta imediata ao cliente para confirmação instantânea na interface
-    res.status(201).json({
-      success: true,
-      message: 'Solicitação de orçamento recebida com sucesso.',
-      quote: newQuote
-    });
+    // Disparo garantido dos e-mails via Zoho Mail (executado com await para evitar congelamento em serverless/Vercel)
+    let adminNotified = false;
+    let clientNotified = false;
 
-    // Disparo dos e-mails via Zoho Mail em segundo plano (não bloqueia a resposta do usuário)
-    const { settings } = await storage.getContent();
-    if (!hasZohoConfigured(settings)) {
-      console.warn('[Zoho Mail] Envio ignorado: credenciais do Zoho não configuradas.');
-      return;
-    }
-    const adminRecipient = settings.zohoAlertRecipient || settings.contactEmail || settings.zohoUser;
+    try {
+      const { settings } = await storage.getContent();
+      if (hasZohoConfigured(settings)) {
+        const adminRecipient = settings.zohoAlertRecipient || settings.contactEmail || settings.zohoUser;
 
-    runInBackground(
-      Promise.allSettled([
-        dispatchZohoEmail(settings, {
-          to: newQuote.email,
-          subject: `Confirmação de Solicitação de Orçamento - Protocolo ${newQuote.protocol} | Wort Studio`,
-          html: renderClientQuoteEmail(newQuote, settings)
-        }).then(r => {
-          if (r.success) console.log(`[Zoho Mail] Confirmação enviada para cliente: ${newQuote.email}`);
-          else console.warn(`[Zoho Mail] Aviso no envio ao cliente (${newQuote.email}):`, r.error);
-        }),
-        adminRecipient
-          ? dispatchZohoEmail(settings, {
+        // 1. Notifica prioritariamente a equipe administrativa sobre o novo lead
+        if (adminRecipient) {
+          try {
+            const adminRes = await dispatchZohoEmail(settings, {
               to: adminRecipient,
               subject: `[Novo Lead Wort Studio] ${newQuote.name} - Protocolo ${newQuote.protocol}`,
               html: renderAdminLeadNotificationEmail(newQuote, settings)
-            }).then(r => {
-              if (r.success) console.log(`[Zoho Mail] Alerta de lead enviado para admin: ${adminRecipient}`);
-              else console.warn(`[Zoho Mail] Aviso no alerta admin (${adminRecipient}):`, r.error);
-            })
-          : Promise.resolve()
-      ])
-    );
+            });
+            if (adminRes.success) {
+              adminNotified = true;
+              console.log(`[Zoho Mail] Alerta de lead enviado com sucesso para admin: ${adminRecipient}`);
+            } else {
+              console.warn(`[Zoho Mail] Aviso no envio de alerta admin (${adminRecipient}):`, adminRes.error);
+            }
+          } catch (adminErr: any) {
+            console.error('[Zoho Mail] Erro ao despachar alerta admin:', adminErr?.message || adminErr);
+          }
+        }
+
+        // 2. Envia confirmação de solicitação com protocolo para o cliente
+        if (newQuote.email) {
+          try {
+            const clientRes = await dispatchZohoEmail(settings, {
+              to: newQuote.email,
+              subject: `Confirmação de Solicitação de Orçamento - Protocolo ${newQuote.protocol} | Wort Studio`,
+              html: renderClientQuoteEmail(newQuote, settings)
+            });
+            if (clientRes.success) {
+              clientNotified = true;
+              console.log(`[Zoho Mail] Confirmação enviada com sucesso para cliente: ${newQuote.email}`);
+            } else {
+              console.warn(`[Zoho Mail] Aviso no envio ao cliente (${newQuote.email}):`, clientRes.error);
+            }
+          } catch (clientErr: any) {
+            console.error('[Zoho Mail] Erro ao despachar confirmação cliente:', clientErr?.message || clientErr);
+          }
+        }
+      } else {
+        console.warn('[Zoho Mail] Envio ignorado: credenciais do Zoho não configuradas.');
+      }
+    } catch (mailErr: any) {
+      console.error('[Zoho Mail] Erro no fluxo de notificações do orçamento:', mailErr?.message || mailErr);
+    }
+
+    // Resposta com garantia de dados persistidos no Supabase e e-mails despachados
+    res.status(201).json({
+      success: true,
+      message: 'Solicitação de orçamento recebida com sucesso.',
+      quote: newQuote,
+      adminNotified,
+      clientNotified
+    });
   }));
 
   app.patch('/api/quotes/:id/status', requireAdmin, wrap(async (req, res) => {
