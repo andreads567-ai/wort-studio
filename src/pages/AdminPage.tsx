@@ -88,6 +88,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     valid: boolean;
     clientCredentialsValid: boolean;
     tokenValid: boolean;
+    mailboxAddress?: string;
     message?: string;
     error?: string;
   }>({ checked: false, valid: false, clientCredentialsValid: false, tokenValid: false });
@@ -125,6 +126,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
         valid: res.valid,
         clientCredentialsValid: res.clientCredentialsValid,
         tokenValid: res.tokenValid,
+        mailboxAddress: res.mailboxAddress,
         message: res.message,
         error: res.error
       });
@@ -1705,7 +1707,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-white mb-1">
-                        E-mail da Conta Zoho (Remetente Oficial)
+                        E-mail da Conta Zoho / Remetente e Respostas (Reply-To)
                       </label>
                       <input
                         type="email"
@@ -1714,6 +1716,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                         placeholder="wort.studio@aliandre.com.br"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-[#05070D] border border-[#222B3D] text-xs sm:text-sm text-white"
                       />
+                      <span className="text-[11px] text-[#B8C1D1]/70 mt-1 block">
+                        E-mail para onde os clientes responderão os orçamentos automáticos (ex: wort.studio@aliandre.com.br).
+                      </span>
                     </div>
 
                     <div>

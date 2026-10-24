@@ -112,5 +112,6 @@ export interface CommercialSettings {
   zohoRedirectUri?: string;
   zohoSenderName?: string;
   zohoAlertRecipient?: string;
+  zohoMailboxAddress?: string;
   zohoEnabled?: boolean;
 }

@@ -175,9 +175,7 @@ export async function verifyAndRefreshZohoOAuth(
 
     const accountInfo = await fetchZohoMailAccount(accessToken);
     if (accountInfo.accountId) accountId = accountInfo.accountId;
-    if (!mailboxAddress && accountInfo.mailboxAddress) {
-      mailboxAddress = accountInfo.mailboxAddress;
-    }
+    const officialMailbox = accountInfo.mailboxAddress || settings.zohoMailboxAddress || 'andredesouza@aliandre.com.br';
 
     if (persistToStorage) {
       try {
@@ -190,7 +188,8 @@ export async function verifyAndRefreshZohoOAuth(
           zohoRefreshToken: refreshToken,
           zohoAccessToken: accessToken,
           ...(accountId ? { zohoAccountId: accountId } : {}),
-          ...(userConfiguredEmail ? { zohoUser: userConfiguredEmail } : (!content.settings.zohoUser && mailboxAddress ? { zohoUser: mailboxAddress } : {}))
+          ...(officialMailbox ? { zohoMailboxAddress: officialMailbox } : {}),
+          ...(userConfiguredEmail ? { zohoUser: userConfiguredEmail } : (!content.settings.zohoUser && officialMailbox ? { zohoUser: officialMailbox } : {}))
         };
         await storage.saveContent(content);
       } catch (err) {
@@ -205,7 +204,7 @@ export async function verifyAndRefreshZohoOAuth(
       accessToken,
       refreshToken,
       accountId,
-      mailboxAddress: userConfiguredEmail || mailboxAddress,
+      mailboxAddress: officialMailbox,
       message: 'Client ID, Client Secret e Refresh Token verificados com sucesso! Access Token renovado automaticamente.'
     };
   } catch (err: any) {
@@ -274,53 +273,71 @@ export async function dispatchZohoEmail(settings: CommercialSettings, options: M
   if (isOAuth && (settings.zohoRefreshToken || process.env.ZOHO_REFRESH_TOKEN || settings.zohoAccessToken)) {
     let token = settings.zohoAccessToken || '';
     let accountId = settings.zohoAccountId || process.env.ZOHO_ACCOUNT_ID || '';
-    let fromAddress = settings.zohoUser || process.env.ZOHO_USER || '';
+    const configuredUser = (settings.zohoUser || process.env.ZOHO_USER || '').trim();
+    let officialMailbox = (settings.zohoMailboxAddress || '').trim();
+
+    // Se não há token, accountId ou officialMailbox, renova via OAuth
+    if (!token || !accountId || !officialMailbox) {
+      try {
+        const refreshed = await refreshZohoAccessToken(settings);
+        token = refreshed.accessToken;
+        if (refreshed.accountId) accountId = refreshed.accountId;
+        if (refreshed.mailboxAddress) officialMailbox = refreshed.mailboxAddress;
+      } catch (err) {
+        console.warn('[Zoho Mail] Falha prévia ao renovar token OAuth:', err);
+      }
+    }
 
     const trySendWithToken = async (authToken: string, accId: string, senderEmail: string) => {
+      const body: Record<string, any> = {
+        fromAddress: senderEmail,
+        toAddress: options.to,
+        subject: options.subject,
+        content: options.html,
+        mailFormat: 'html'
+      };
+      // Se há um e-mail configurado pelo usuário diferente do sender, define inReplyTo
+      // para que respostas de clientes cheguem à caixa desejada (ex: wort.studio@aliandre.com.br)
+      if (configuredUser) {
+        body.inReplyTo = configuredUser;
+      }
       return fetch(`https://mail.zoho.com/api/accounts/${accId}/messages`, {
         method: 'POST',
         headers: {
           Authorization: `Zoho-oauthtoken ${authToken}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          fromAddress: senderEmail,
-          toAddress: options.to,
-          subject: options.subject,
-          content: options.html,
-          mailFormat: 'html'
-        })
+        body: JSON.stringify(body)
       });
     };
 
     try {
-      // Se não há token ou accountId, renova automaticamente antes da primeira tentativa
-      if (!token || !accountId) {
-        const refreshed = await refreshZohoAccessToken(settings);
-        token = refreshed.accessToken;
-        if (refreshed.accountId) accountId = refreshed.accountId;
-        if (!fromAddress && refreshed.mailboxAddress) fromAddress = refreshed.mailboxAddress;
-      }
-
-      let res = await trySendWithToken(token, accountId, fromAddress);
-
-      // Se o token expirou (401) ou a conta mudou (400/404), renova automaticamente via Refresh Token e tenta novamente
-      if (!res.ok) {
-        const refreshed = await refreshZohoAccessToken(settings);
-        token = refreshed.accessToken;
-        if (refreshed.accountId) accountId = refreshed.accountId;
-        res = await trySendWithToken(token, accountId, fromAddress || refreshed.mailboxAddress || '');
-        if (!res.ok && refreshed.mailboxAddress && refreshed.mailboxAddress !== fromAddress) {
-          res = await trySendWithToken(token, accountId, refreshed.mailboxAddress);
-        }
-      }
-
-      const text = await res.text();
+      // 1. Tenta enviar prioritariamente com o e-mail configurado pelo usuário se houver; se não houver, usa officialMailbox
+      const firstSender = configuredUser || officialMailbox || 'andredesouza@aliandre.com.br';
+      let res = await trySendWithToken(token, accountId, firstSender);
+      let text = await res.text();
       let data: any = {};
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error(`Resposta inválida da Zoho API (${res.status}): ${text}`);
+      try { data = JSON.parse(text); } catch { /* ignore */ }
+
+      // 2. Se o token expirou (401) ou inválido, renova e tenta de novo
+      if (res.status === 401 || data.error === 'invalid_token') {
+        const refreshed = await refreshZohoAccessToken(settings);
+        token = refreshed.accessToken;
+        if (refreshed.accountId) accountId = refreshed.accountId;
+        if (refreshed.mailboxAddress) officialMailbox = refreshed.mailboxAddress;
+        res = await trySendWithToken(token, accountId, firstSender);
+        text = await res.text();
+        try { data = JSON.parse(text); } catch { /* ignore */ }
+      }
+
+      // 3. Se o Zoho rejeitou porque o e-mail não é remetente cadastrado na conta Zoho (ex: status 500 "Este Endereço de Remetente não existe!"),
+      // faz fallback AUTOMÁTICO e TRANSPARENTE para o mailbox oficial autenticado da conta Zoho (ex: andredesouza@aliandre.com.br)
+      // mantendo inReplyTo configurado para configuredUser!
+      if (!res.ok && officialMailbox && firstSender !== officialMailbox) {
+        console.warn(`[Zoho Mail] Remetente '${firstSender}' rejeitado pelo Zoho (${res.status}). Realizando fallback automático para mailbox autenticada '${officialMailbox}' (inReplyTo: '${configuredUser}')...`);
+        res = await trySendWithToken(token, accountId, officialMailbox);
+        text = await res.text();
+        try { data = JSON.parse(text); } catch { /* ignore */ }
       }
 
       if (res.ok && (data.status?.code === 200 || data.data?.messageId)) {
@@ -329,7 +346,9 @@ export async function dispatchZohoEmail(settings: CommercialSettings, options: M
           messageId: data.data?.messageId || data.data?.mailId || 'zoho-api-msg'
         };
       }
-      throw new Error(data.status?.description || data.data?.moreInfo || data.error || text);
+
+      const errDescription = data.data?.moreInfo || data.status?.description || data.error || text;
+      throw new Error(`Falha Zoho API (${res.status}): ${errDescription}`);
     } catch (err: any) {
       console.error('Erro no despacho via Zoho REST API:', err);
       // Fallback para SMTP somente se o modo for SMTP ou se houver senha de aplicativo Zoho válida
