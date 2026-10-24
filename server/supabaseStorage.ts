@@ -65,8 +65,7 @@ export function supabaseRowToQuote(row: any): QuoteRequest {
  * Conforme requerido, mapeia exatamente: status, client_id, client_secret, refresh_token, access_token, etc.
  */
 export function mapSettingsToSupabase(settings: CommercialSettings): Record<string, unknown> {
-  const hasOAuth = Boolean(settings.zohoClientId || settings.zohoRefreshToken);
-  const authType = settings.zohoAuthType === 'smtp' && settings.zohoPass ? 'smtp' : hasOAuth ? 'oauth2' : (settings.zohoAuthType || 'oauth2');
+  const authType = settings.zohoAuthType || 'oauth2';
   return {
     id: 'default',
     client_id: settings.zohoClientId || null,
@@ -74,7 +73,7 @@ export function mapSettingsToSupabase(settings: CommercialSettings): Record<stri
     refresh_token: settings.zohoRefreshToken || null,
     access_token: settings.zohoAccessToken || null,
     account_id: settings.zohoAccountId || null,
-    zoho_user: settings.zohoUser || null,
+    zoho_user: settings.zohoUser ? settings.zohoUser.trim() : null,
     zoho_pass: settings.zohoPass || null,
     zoho_sender_name: settings.zohoSenderName || null,
     zoho_alert_recipient: settings.zohoAlertRecipient || null,
@@ -113,7 +112,7 @@ export function mapSupabaseToSettings(row: any, base: CommercialSettings = INITI
   const zohoAccountId = row.account_id || row.zoho_account_id || row.zohoAccountId || jsonContent.zohoAccountId || base.zohoAccountId || '';
   const zohoPass = row.zoho_pass ?? row.pass ?? row.zohoPass ?? jsonContent.zohoPass ?? base.zohoPass ?? '';
   const rawAuthType = row.zoho_auth_type || row.auth_type || row.zohoAuthType || jsonContent.zohoAuthType || base.zohoAuthType || 'oauth2';
-  const zohoAuthType = ((zohoClientId || zohoRefreshToken) && !zohoPass) ? 'oauth2' : (rawAuthType as 'smtp' | 'oauth2');
+  const zohoAuthType = (rawAuthType === 'smtp' ? 'smtp' : 'oauth2') as 'smtp' | 'oauth2';
 
   return {
     ...base,

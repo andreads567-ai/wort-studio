@@ -134,7 +134,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           ...(res.refreshToken ? { zohoRefreshToken: res.refreshToken } : {}),
           ...(res.accessToken ? { zohoAccessToken: res.accessToken } : {}),
           ...(res.accountId ? { zohoAccountId: res.accountId } : {}),
-          ...(res.mailboxAddress ? { zohoUser: res.mailboxAddress } : {})
+          ...(!prev.zohoUser && res.mailboxAddress ? { zohoUser: res.mailboxAddress } : {})
         }));
       }
       return res;
@@ -158,19 +158,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           user: data.zohoUser
         });
         setAdminSettingsLoaded(true);
-        const updatedSettings: CommercialSettings = {
-          ...settingsForm,
+        setSettingsForm(prev => ({
+          ...prev,
           ...data,
-          zohoRefreshToken: data.zohoRefreshToken ?? settingsForm.zohoRefreshToken ?? '',
-          zohoAccessToken: (data as any).accessToken || data.zohoAccessToken || settingsForm.zohoAccessToken || '',
-          zohoClientId: data.zohoClientId ?? settingsForm.zohoClientId ?? '',
-          zohoClientSecret: data.zohoClientSecret ?? settingsForm.zohoClientSecret ?? '',
-          zohoUser: data.zohoUser || settingsForm.zohoUser || 'wort.studio@aliandre.com.br',
-          zohoAuthType: ((data.zohoClientId || data.zohoRefreshToken) && !data.zohoPass) ? 'oauth2' : (data.zohoAuthType || 'oauth2')
-        };
-        setSettingsForm(updatedSettings);
-        if (verifyAfterLoad && updatedSettings.zohoAuthType !== 'smtp') {
-          await runZohoVerification(updatedSettings);
+          zohoRefreshToken: data.zohoRefreshToken ?? prev.zohoRefreshToken ?? '',
+          zohoAccessToken: (data as any).accessToken || data.zohoAccessToken || prev.zohoAccessToken || '',
+          zohoClientId: data.zohoClientId ?? prev.zohoClientId ?? '',
+          zohoClientSecret: data.zohoClientSecret ?? prev.zohoClientSecret ?? '',
+          zohoUser: data.zohoUser || prev.zohoUser || 'wort.studio@aliandre.com.br',
+          zohoAuthType: data.zohoAuthType === 'smtp' ? 'smtp' : 'oauth2'
+        }));
+        if (verifyAfterLoad && data.zohoAuthType !== 'smtp') {
+          await runZohoVerification(data);
         }
       }
     } catch (err) {
@@ -1710,7 +1709,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       </label>
                       <input
                         type="email"
-                        value={settingsForm.zohoUser || 'wort.studio@aliandre.com.br'}
+                        value={settingsForm.zohoUser ?? ''}
                         onChange={(e) => setSettingsForm({ ...settingsForm, zohoUser: e.target.value })}
                         placeholder="wort.studio@aliandre.com.br"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-[#05070D] border border-[#222B3D] text-xs sm:text-sm text-white"
@@ -1723,7 +1722,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       </label>
                       <input
                         type="text"
-                        value={settingsForm.zohoSenderName || 'WortSite Studio'}
+                        value={settingsForm.zohoSenderName ?? ''}
                         onChange={(e) => setSettingsForm({ ...settingsForm, zohoSenderName: e.target.value })}
                         placeholder="WortSite Studio"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-[#05070D] border border-[#222B3D] text-xs sm:text-sm text-white"
@@ -1855,7 +1854,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       </label>
                       <input
                         type="text"
-                        value={settingsForm.zohoHost || 'smtp.zoho.com'}
+                        value={settingsForm.zohoHost ?? ''}
                         onChange={(e) => setSettingsForm({ ...settingsForm, zohoHost: e.target.value })}
                         placeholder="smtp.zoho.com"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-[#05070D] border border-[#222B3D] text-xs sm:text-sm text-white font-mono"

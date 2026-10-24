@@ -296,13 +296,13 @@ export function createApp() {
       incoming.adminPasswordHash = current.adminPasswordHash || process.env.ADMIN_PASSWORD || '';
     }
 
-    // Proteção: nunca apagar tokens/credenciais OAuth existentes se o cliente enviou string vazia
+    // Proteção: nunca apagar tokens/credenciais OAuth existentes se o cliente não enviou o campo
     for (const key of ['zohoRefreshToken', 'zohoAccessToken', 'zohoClientId', 'zohoClientSecret', 'zohoAccountId'] as const) {
-      if (!incoming[key] && current[key]) incoming[key] = current[key];
+      if (incoming[key] === undefined && current[key]) incoming[key] = current[key];
     }
 
-    if ((incoming.zohoClientId || incoming.zohoRefreshToken) && !incoming.zohoPass) {
-      incoming.zohoAuthType = 'oauth2';
+    if (incoming.zohoUser !== undefined) {
+      incoming.zohoUser = String(incoming.zohoUser).trim();
     }
 
     content.settings = { ...current, ...incoming };
@@ -315,7 +315,10 @@ export function createApp() {
         if (zohoVerification.refreshToken) content.settings.zohoRefreshToken = zohoVerification.refreshToken;
         if (zohoVerification.accessToken) content.settings.zohoAccessToken = zohoVerification.accessToken;
         if (zohoVerification.accountId) content.settings.zohoAccountId = zohoVerification.accountId;
-        if (zohoVerification.mailboxAddress && !incoming.zohoUser) content.settings.zohoUser = zohoVerification.mailboxAddress;
+        // Nunca sobrescreve o e-mail remetente digitado pelo usuário!
+        if (!content.settings.zohoUser && zohoVerification.mailboxAddress) {
+          content.settings.zohoUser = zohoVerification.mailboxAddress;
+        }
       }
     }
 
@@ -610,11 +613,13 @@ export function createApp() {
       if (newAccessToken) settings.zohoAccessToken = newAccessToken;
       settings.zohoAuthType = 'oauth2';
 
-      // 5. Detecta automaticamente o accountId e endereço da conta na Zoho Mail API
+      // 5. Detecta automaticamente o accountId na Zoho Mail API (preservando o zohoUser definido pelo usuário)
       if (newAccessToken) {
         const accInfo = await fetchZohoMailAccount(newAccessToken);
         if (accInfo.accountId) settings.zohoAccountId = accInfo.accountId;
-        if (accInfo.mailboxAddress) settings.zohoUser = accInfo.mailboxAddress;
+        if (!settings.zohoUser && accInfo.mailboxAddress) {
+          settings.zohoUser = accInfo.mailboxAddress;
+        }
       }
 
       // 6. Grava permanentemente no Supabase (settings + site_content)

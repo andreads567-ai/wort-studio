@@ -170,11 +170,14 @@ export async function verifyAndRefreshZohoOAuth(
 
     const accessToken = String(data.access_token);
     let accountId = settings.zohoAccountId || '';
-    let mailboxAddress = settings.zohoUser || '';
+    const userConfiguredEmail = (settings.zohoUser || '').trim();
+    let mailboxAddress = userConfiguredEmail;
 
     const accountInfo = await fetchZohoMailAccount(accessToken);
     if (accountInfo.accountId) accountId = accountInfo.accountId;
-    if (accountInfo.mailboxAddress) mailboxAddress = accountInfo.mailboxAddress;
+    if (!mailboxAddress && accountInfo.mailboxAddress) {
+      mailboxAddress = accountInfo.mailboxAddress;
+    }
 
     if (persistToStorage) {
       try {
@@ -187,8 +190,7 @@ export async function verifyAndRefreshZohoOAuth(
           zohoRefreshToken: refreshToken,
           zohoAccessToken: accessToken,
           ...(accountId ? { zohoAccountId: accountId } : {}),
-          ...(mailboxAddress ? { zohoUser: mailboxAddress } : {}),
-          zohoAuthType: 'oauth2'
+          ...(userConfiguredEmail ? { zohoUser: userConfiguredEmail } : (!content.settings.zohoUser && mailboxAddress ? { zohoUser: mailboxAddress } : {}))
         };
         await storage.saveContent(content);
       } catch (err) {
@@ -203,7 +205,7 @@ export async function verifyAndRefreshZohoOAuth(
       accessToken,
       refreshToken,
       accountId,
-      mailboxAddress,
+      mailboxAddress: userConfiguredEmail || mailboxAddress,
       message: 'Client ID, Client Secret e Refresh Token verificados com sucesso! Access Token renovado automaticamente.'
     };
   } catch (err: any) {
@@ -297,7 +299,7 @@ export async function dispatchZohoEmail(settings: CommercialSettings, options: M
         const refreshed = await refreshZohoAccessToken(settings);
         token = refreshed.accessToken;
         if (refreshed.accountId) accountId = refreshed.accountId;
-        if (refreshed.mailboxAddress) fromAddress = refreshed.mailboxAddress;
+        if (!fromAddress && refreshed.mailboxAddress) fromAddress = refreshed.mailboxAddress;
       }
 
       let res = await trySendWithToken(token, accountId, fromAddress);
@@ -307,8 +309,10 @@ export async function dispatchZohoEmail(settings: CommercialSettings, options: M
         const refreshed = await refreshZohoAccessToken(settings);
         token = refreshed.accessToken;
         if (refreshed.accountId) accountId = refreshed.accountId;
-        if (refreshed.mailboxAddress) fromAddress = refreshed.mailboxAddress;
-        res = await trySendWithToken(token, accountId, fromAddress);
+        res = await trySendWithToken(token, accountId, fromAddress || refreshed.mailboxAddress || '');
+        if (!res.ok && refreshed.mailboxAddress && refreshed.mailboxAddress !== fromAddress) {
+          res = await trySendWithToken(token, accountId, refreshed.mailboxAddress);
+        }
       }
 
       const text = await res.text();
