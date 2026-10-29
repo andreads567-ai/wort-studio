@@ -14,7 +14,6 @@ import { AdminPage } from './pages/AdminPage';
 import { DemoViewerModal } from './components/DemoViewerModal';
 import { QuoteModal } from './components/QuoteModal';
 import { LegalModal } from './components/LegalModal';
-import { ProposalsManager } from './components/proposals/ProposalsManager';
 import { ProposalPreviewModal } from './components/proposals/ProposalPreviewModal';
 import { DemoModel, PlanItem, ServiceItem, CommercialSettings, ProjectType, CommercialProposal } from './types';
 import { INITIAL_MODELS, INITIAL_PLANS, INITIAL_SERVICES, INITIAL_SETTINGS } from './data/initialData';
@@ -23,6 +22,7 @@ import { api, buildWhatsAppUrl } from './services/api';
 export default function App() {
   // Navigation State
   const [activeTab, setActiveTab] = useState<string>('inicio');
+  const [adminInitialTab, setAdminInitialTab] = useState<'quotes' | 'proposals' | 'models' | 'plans' | 'settings' | 'api'>('quotes');
 
   // Business Data State
   const [models, setModels] = useState<DemoModel[]>(INITIAL_MODELS);
@@ -58,8 +58,9 @@ export default function App() {
       const urlParams = new URLSearchParams(window.location.search);
       const propostaParam = urlParams.get('proposta') || urlParams.get('proposal');
       const tabParam = urlParams.get('tab');
-      if (tabParam === 'propostas') {
-        setActiveTab('propostas');
+      if (tabParam === 'propostas' || tabParam === 'proposals') {
+        setAdminInitialTab('proposals');
+        setActiveTab('admin');
       }
       if (propostaParam) {
         api.getProposal(propostaParam).then(prop => {
@@ -193,18 +194,13 @@ export default function App() {
             <ContactPage settings={settings} />
           )}
 
-          {activeTab === 'propostas' && (
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-              <ProposalsManager />
-            </div>
-          )}
-
           {activeTab === 'admin' && (
             <AdminPage
               models={models}
               plans={plans}
               settings={settings}
               onRefreshData={loadData}
+              initialTab={adminInitialTab}
             />
           )}
         </motion.div>

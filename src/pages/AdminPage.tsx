@@ -45,13 +45,15 @@ interface AdminPageProps {
   plans: PlanItem[];
   settings: CommercialSettings;
   onRefreshData: () => void;
+  initialTab?: 'quotes' | 'proposals' | 'models' | 'plans' | 'settings' | 'api';
 }
 
 export const AdminPage: React.FC<AdminPageProps> = ({
   models: initialModels,
   plans: initialPlans,
   settings: initialSettings,
-  onRefreshData
+  onRefreshData,
+  initialTab
 }) => {
   // Authentication State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -62,7 +64,13 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [showSettingsPassword, setShowSettingsPassword] = useState(false);
 
   // Active Admin Tab
-  const [activeTab, setActiveTab] = useState<'quotes' | 'proposals' | 'models' | 'plans' | 'settings' | 'api'>('quotes');
+  const [activeTab, setActiveTab] = useState<'quotes' | 'proposals' | 'models' | 'plans' | 'settings' | 'api'>(initialTab || 'quotes');
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   // Backend Status State
   const [isBackendConnected, setIsBackendConnected] = useState(true);
